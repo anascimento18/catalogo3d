@@ -18,7 +18,8 @@ from app.config import (
     ADMIN_USERNAME,
     ALLOWED_3D_EXTENSIONS,
     ALLOWED_IMG_EXTENSIONS,
-    BASE_DIR
+    BASE_DIR,
+    CATALOG_DOMAIN
 )
 from app.database import init_db, get_db, Model3D, Category, Order, AdminUser
 from app.security import (
