@@ -528,20 +528,24 @@ body {
 }
 
 /* Modal */
+/* Modal */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.8);
+  background: rgba(0, 0, 0, 0.82);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   z-index: 200;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding: 16px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.25s ease;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .modal-overlay.active {
@@ -554,11 +558,14 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 18px;
   width: 100%;
-  max-width: 500px;
-  overflow: hidden;
+  max-width: 520px;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.8), 0 0 32px rgba(239, 35, 60, 0.15);
   transform: translateY(20px);
   transition: transform 0.25s ease;
+  margin: auto;
 }
 
 .modal-overlay.active .modal-box {
@@ -566,11 +573,15 @@ body {
 }
 
 .modal-header {
-  padding: 20px 24px;
+  padding: 18px 24px;
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
+  background: #18181b;
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
 }
 
 .modal-header h3 {
@@ -595,7 +606,43 @@ body {
 }
 
 .modal-body {
-  padding: 24px;
+  padding: 20px 24px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.modal-body::-webkit-scrollbar {
+  width: 6px;
+}
+.modal-body::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+.modal-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+.modal-body::-webkit-scrollbar-thumb:hover {
+  background: #ef233c;
+}
+
+@media (max-width: 640px) {
+  .modal-overlay {
+    padding: 10px;
+  }
+  .modal-box {
+    max-height: calc(100vh - 20px);
+    border-radius: 14px;
+  }
+  .modal-header {
+    padding: 14px 18px;
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+  }
+  .modal-body {
+    padding: 16px;
+  }
 }
 
 /* Galeria e Preview no Modal */

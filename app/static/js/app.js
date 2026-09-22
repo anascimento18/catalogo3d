@@ -211,11 +211,13 @@ function openOrderModal(modelId) {
   document.getElementById('submitOrderBtn').innerHTML = `<i data-lucide="send" style="width: 18px; height: 18px;"></i><span>Pedir no WhatsApp</span>`;
 
   document.getElementById('orderModal').classList.add('active');
+  document.body.style.overflow = 'hidden';
   if (window.lucide) lucide.createIcons();
 }
 
 function closeOrderModal() {
   document.getElementById('orderModal').classList.remove('active');
+  document.body.style.overflow = '';
 }
 
 function setupModalEvents() {

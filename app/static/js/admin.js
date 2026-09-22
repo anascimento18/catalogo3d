@@ -175,6 +175,7 @@ window.openEditModal = function(id) {
   if (modal) {
     modal.style.display = 'flex';
     modal.classList.add('active');
+    document.body.style.overflow = 'hidden';
   }
   if (window.lucide) lucide.createIcons();
 };
@@ -184,6 +185,7 @@ window.closeEditModal = function() {
   if (modal) {
     modal.style.display = 'none';
     modal.classList.remove('active');
+    document.body.style.overflow = '';
   }
 };
 
@@ -246,6 +248,19 @@ function setupEditForm() {
       btn.disabled = false;
       btn.innerHTML = `<i data-lucide="check" style="width: 16px; height: 16px;"></i><span>Salvar Alterações</span>`;
       if (window.lucide) lucide.createIcons();
+    }
+  });
+
+  // Fechar ao clicar fora ou pressionar ESC
+  const modal = document.getElementById('editModal');
+  if (modal) {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeEditModal();
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal && modal.classList.contains('active')) {
+      closeEditModal();
     }
   });
 }
