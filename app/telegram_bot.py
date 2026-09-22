@@ -50,9 +50,11 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: s
     chat_id = message.get("chat", {}).get("id")
 
     # Validação de segurança: apenas o André pode enviar
-    if admin_chat_id and str(admin_chat_id) != user_id and str(admin_chat_id) != str(chat_id):
-        logger.warning(f"Tentativa de envio não autorizada no Telegram pelo usuário {user_id}")
-        return {"ok": False, "error": "Não autorizado"}
+    if admin_chat_id:
+        allowed_ids = [s.strip().strip('"\'') for s in str(admin_chat_id).split(",") if s.strip()]
+        if allowed_ids and str(user_id) not in allowed_ids and str(chat_id) not in allowed_ids:
+            logger.warning(f"Tentativa de envio não autorizada no Telegram pelo usuário {user_id} (chat_id: {chat_id})")
+            return {"ok": False, "error": "Não autorizado"}
 
     document = message.get("document")
     photos = message.get("photo")

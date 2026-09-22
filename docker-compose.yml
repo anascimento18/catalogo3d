@@ -43,8 +43,8 @@ services:
       - EVOLUTION_INSTANCE=andre
       
       # Ingestão Automática via Telegram Bot
-      - TELEGRAM_BOT_TOKEN=
-      - TELEGRAM_ADMIN_CHAT_ID=
+      - TELEGRAM_BOT_TOKEN=8856055764:AAF5PxZzZ6y9GHgCGr-t6apEtQkPKFDfGsM
+      - TELEGRAM_ADMIN_CHAT_ID=5370959021438146805
 
     deploy:
       mode: replicated
