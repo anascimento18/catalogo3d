@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Acesso Administrativo | 3A 3D</title>
+  
+  <link rel="stylesheet" href="/static/css/animations.css">
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    .login-container {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      position: relative;
+    }
+    .login-box {
+      width: 100%;
+      max-width: 420px;
+      background: rgba(24, 24, 27, 0.85);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 36px 32px;
+      box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.7);
+    }
+    .login-header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .login-header .icon-lock {
+      width: 48px;
+      height: 48px;
+      background: rgba(239, 35, 60, 0.15);
+      border: 1px solid rgba(239, 35, 60, 0.3);
+      color: #ef233c;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="login-container">
+    <div class="hero-glow"></div>
+
+    <div class="login-box animate-slide-up">
+      <div class="login-header">
+        <div class="icon-lock">
+          <i data-lucide="shield-check" style="width: 24px; height: 24px;"></i>
+        </div>
+        <h2 style="font-family: var(--font-display); font-size: 22px; font-weight: 800; margin-bottom: 6px;">Painel de Controle 3D</h2>
+        <p style="font-size: 13.5px; color: var(--text-muted);">Área restrita de gerenciamento de arquivos e orçamentos</p>
+      </div>
+
+      <div id="loginAlert" style="display: none; padding: 10px 14px; border-radius: 8px; font-size: 13.5px; margin-bottom: 18px; background: rgba(239, 35, 60, 0.15); border: 1px solid rgba(239, 35, 60, 0.3); color: #fca5a5;"></div>
+
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="username">Usuário</label>
+          <input type="text" id="username" class="form-input" placeholder="Seu usuário" required autocomplete="username">
+        </div>
+
+        <div class="form-group" style="margin-bottom: 24px;">
+          <label for="password">Senha</label>
+          <input type="password" id="password" class="form-input" placeholder="Sua senha de acesso" required autocomplete="current-password">
+        </div>
+
+        <button type="submit" class="btn-submit" id="btnLogin">
+          <i data-lucide="log-in" style="width: 18px; height: 18px;"></i>
+          <span>Entrar no Painel</span>
+        </button>
+      </form>
+
+      <div style="text-align: center; margin-top: 24px;">
+        <a href="/" style="font-size: 13px; color: var(--text-muted); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+          <i data-lucide="arrow-left" style="width: 14px; height: 14px;"></i>
+          <span>Voltar para a Vitrine</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    lucide.createIcons();
+
+    const form = document.getElementById('loginForm');
+    const alertBox = document.getElementById('loginAlert');
+    const btn = document.getElementById('btnLogin');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      alertBox.style.display = 'none';
+
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value.trim();
+
+      btn.disabled = true;
+      btn.innerHTML = `<span>Autenticando...</span>`;
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.detail || 'Usuário ou senha incorretos.');
+        }
+
+        window.location.href = '/admin';
+      } catch (err) {
+        alertBox.textContent = err.message;
+        alertBox.style.display = 'block';
+        btn.disabled = false;
+        btn.innerHTML = `<i data-lucide="log-in" style="width: 18px; height: 18px;"></i><span>Entrar no Painel</span>`;
+        lucide.createIcons();
+      }
+    });
+  </script>
+</body>
+</html>

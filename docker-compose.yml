@@ -1,0 +1,63 @@
+version: "3.7"
+
+services:
+  catalogo3d:
+    image: python:3.11-slim
+    hostname: "{{.Service.Name}}.{{.Task.Slot}}"
+    networks:
+      - network_swarm_public
+    volumes:
+      - catalogo3d_data:/app/data
+    environment:
+      # Conexão com o PostgreSQL interno do Swarm
+      - DATABASE_URL=postgresql://postgres:Anascimento2025Antonio@postgreslink:5432/catalogo3d
+      
+      # Segurança e Acesso Administrativo
+      - ADMIN_USERNAME=andre
+      - ADMIN_PASSWORD=3aField@2026
+      - ADMIN_ROUTE=/loginAdmin
+      - SECRET_KEY=b98f2c31e405a6d7c8e9fa0123456789abcdef0123456789abcdef0123456789
+      
+      # Destino das Notificações
+      - DEST_WHATSAPP=5565992217557
+      - CATALOG_DOMAIN=https://catalogo3d.3afieldservice.com.br
+      
+      # Integração com n8n e Evolution API
+      - N8N_WEBHOOK_URL=https://hookncst.3afieldservice.com.br/webhook/catalogo-pedido
+      - EVOLUTION_URL=https://evowsapi.3afieldservice.com.br
+      - EVOLUTION_KEY=4eddc4b3-5499-47a1-9b8b-d4afa9ad00e8
+      - EVOLUTION_INSTANCE=andre
+      
+      # Ingestão Automática via Telegram Bot
+      - TELEGRAM_BOT_TOKEN=
+      - TELEGRAM_ADMIN_CHAT_ID=
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+      labels:
+        # Configuração do Traefik para SSL automático
+        - traefik.enable=true
+        - traefik.http.routers.catalogo3d.rule=Host(`catalogo3d.3afieldservice.com.br`)
+        - traefik.http.routers.catalogo3d.entrypoints=websecure
+        - traefik.http.routers.catalogo3d.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.catalogo3d.service=catalogo3d
+        - traefik.http.services.catalogo3d.loadbalancer.server.port=8000
+        - traefik.http.services.catalogo3d.loadbalancer.passHostHeader=true
+
+volumes:
+  catalogo3d_data:
+    external: true
+    name: catalogo3d_data
+
+networks:
+  network_swarm_public:
+    external: true
+    name: network_swarm_public

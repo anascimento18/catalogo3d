@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3A Impressão 3D | Catálogo & Portfólio de Modelos</title>
+  <meta name="description" content="Catálogo exclusivo de modelos para impressão 3D de alta precisão. Peças sob encomenda, decoração, miniaturas e reposição técnica.">
+  
+  <!-- CSS -->
+  <link rel="stylesheet" href="/static/css/animations.css">
+  <link rel="stylesheet" href="/static/css/styles.css">
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <header class="navbar">
+    <div class="container nav-content">
+      <a href="/" class="brand">
+        <div class="brand-icon">3A</div>
+        <span class="brand-text">3D Field Service</span>
+        <span class="brand-badge">Portfólio</span>
+      </a>
+
+      <div class="nav-links">
+        <a href="https://wa.me/5565992217557" target="_blank" class="nav-btn" style="border-color: rgba(37, 211, 102, 0.4); color: #4ade80;">
+          <i data-lucide="message-circle" style="width: 16px; height: 16px;"></i>
+          <span>Falar no WhatsApp</span>
+        </a>
+        <a href="/loginAdmin" class="nav-btn" title="Área Restrita" style="font-size: 13px; opacity: 0.7;">
+          <i data-lucide="lock" style="width: 14px; height: 14px;"></i>
+          <span>Admin</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-glow"></div>
+    <div class="container">
+      <div class="hero-badge animate-slide-up">
+        <span class="pulse-dot"></span>
+        <span>Impressão 3D Industrial FDM & Resina 8K</span>
+      </div>
+
+      <h1 class="hero-title animate-slide-up">
+        Modelos Exclusivos & <br><span class="gradient-text">Impressão sob Demanda</span>
+      </h1>
+
+      <p class="hero-subtitle animate-slide-up">
+        Navegue pelos projetos disponíveis no nosso portfólio. Escolha a peça desejada e solicite a produção diretamente pelo WhatsApp com atendimento personalizado.
+      </p>
+
+      <!-- Prova Social / Marketing Badges -->
+      <div class="stats-strip animate-slide-up">
+        <div class="stat-item">
+          <i data-lucide="check-circle-2" style="color: #22c55e; width: 18px; height: 18px;"></i>
+          <span><strong>+350</strong> peças entregues</span>
+        </div>
+        <div class="stat-item">
+          <i data-lucide="zap" style="color: #eab308; width: 18px; height: 18px;"></i>
+          <span><strong>48h</strong> prazo médio</span>
+        </div>
+        <div class="stat-item">
+          <i data-lucide="box" style="color: #3b82f6; width: 18px; height: 18px;"></i>
+          <span><strong>PLA, PETG & ABS</strong> alta resistência</span>
+        </div>
+      </div>
+
+      <!-- Barra de Busca -->
+      <div class="search-filter-bar">
+        <div class="search-input-wrapper">
+          <i data-lucide="search" style="width: 20px; height: 20px;"></i>
+          <input type="text" id="searchInput" class="search-input" placeholder="Buscar por modelo, decoração, suporte, engrenagem..." autocomplete="off">
+        </div>
+      </div>
+
+      <!-- Categorias em Abas / Pílulas -->
+      <div class="categories-tabs" id="categoriesContainer">
+        <div class="category-pill active" data-id="all">Todos os Modelos</div>
+        <!-- Carregadas dinamicamente via JS -->
+      </div>
+    </div>
+  </section>
+
+  <!-- Seção Principal de Modelos -->
+  <main class="container" style="min-height: 400px;">
+    
+    <!-- Seção Destaques ("Mais Pedidos") -->
+    <div id="featuredSection" style="display: none; margin-bottom: 40px;">
+      <div class="section-header">
+        <h2 class="section-title">
+          <span>🔥</span> Mais Pedidos & Em Alta
+        </h2>
+      </div>
+      <div class="models-grid" id="featuredGrid">
+        <!-- Injetado via JS -->
+      </div>
+    </div>
+
+    <!-- Catálogo Completo -->
+    <div class="section-header">
+      <h2 class="section-title" id="catalogTitle">
+        <span>📦</span> Catálogo de Peças
+      </h2>
+      <span id="modelCountLabel" style="font-size: 14px; color: #a1a1aa;">Carregando modelos...</span>
+    </div>
+
+    <div class="models-grid" id="modelsGrid">
+      <!-- Injetado via JS -->
+    </div>
+
+    <!-- Estado Vazio / Nenhum resultado -->
+    <div id="emptyState" style="display: none; text-align: center; padding: 60px 20px; color: #71717a;">
+      <i data-lucide="inbox" style="width: 48px; height: 48px; margin: 0 auto 16px; display: block; opacity: 0.5;"></i>
+      <h3 style="font-size: 18px; color: #d4d4d8; margin-bottom: 8px;">Nenhum modelo encontrado</h3>
+      <p style="font-size: 14px;">Tente buscar por outro termo ou escolha outra categoria.</p>
+    </div>
+
+  </main>
+
+  <!-- Modal de Pedido / Solicitação de Impressão -->
+  <div class="modal-overlay" id="orderModal">
+    <div class="modal-box">
+      
+      <div class="modal-header">
+        <h3 id="modalTitle">Solicitar Impressão</h3>
+        <button class="modal-close" id="modalCloseBtn" type="button">
+          <i data-lucide="x" style="width: 20px; height: 20px;"></i>
+        </button>
+      </div>
+
+      <div class="modal-body" id="modalFormContainer">
+        
+        <!-- Preview do Modelo Escolhido -->
+        <div class="modal-item-preview">
+          <img src="" id="modalImg" class="modal-preview-img" alt="Foto do Modelo">
+          <div class="modal-preview-info">
+            <h4 id="modalModelName">Nome do Modelo</h4>
+            <p id="modalModelCategory" style="font-size: 12px; color: #a1a1aa; margin-bottom: 4px;">Categoria</p>
+            <p id="modalModelPrice" style="font-weight: 700; color: #22c55e;"></p>
+          </div>
+        </div>
+
+        <form id="orderForm">
+          <input type="hidden" id="orderModelId">
+
+          <div class="form-group">
+            <label for="custName">Seu Nome *</label>
+            <input type="text" id="custName" class="form-input" placeholder="Ex: Carlos Eduardo" required>
+          </div>
+
+          <div class="form-group">
+            <label for="custPhone">Seu WhatsApp *</label>
+            <input type="tel" id="custPhone" class="form-input" placeholder="(65) 99999-9999" required>
+          </div>
+
+          <div class="form-group">
+            <label for="custNotes">Observações ou Dúvidas (opcional)</label>
+            <textarea id="custNotes" class="form-textarea" placeholder="Ex: Preciso de 2 unidades, prefiro acabamento fosco..."></textarea>
+          </div>
+
+          <button type="submit" class="btn-submit" id="submitOrderBtn">
+            <i data-lucide="send" style="width: 18px; height: 18px;"></i>
+            <span>Pedir no WhatsApp</span>
+          </button>
+        </form>
+
+      </div>
+
+      <!-- Tela de Sucesso após envio -->
+      <div class="modal-body modal-success-box" id="modalSuccessContainer" style="display: none;">
+        <div class="success-icon">
+          <i data-lucide="check" style="width: 32px; height: 32px;"></i>
+        </div>
+        <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 8px;">Pedido Enviado com Sucesso!</h3>
+        <p style="color: #a1a1aa; font-size: 14px; line-height: 1.5; margin-bottom: 20px;">
+          André já recebeu a foto e os detalhes do seu pedido. Caso prefira falar agora mesmo, clique no botão abaixo:
+        </p>
+        <a href="#" id="directWaLink" target="_blank" class="btn-wa-direct">
+          <i data-lucide="message-circle" style="width: 18px; height: 18px;"></i>
+          <span>Abrir Conversa no WhatsApp</span>
+        </a>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <p>© 2026 3A Field Service | Todos os direitos reservados.</p>
+      <p style="margin-top: 6px; font-size: 13px;">Projetos em 3D de alta precisão com acabamento profissional.</p>
+    </div>
+  </footer>
+
+  <!-- Scripts -->
+  <script src="/static/js/app.js"></script>
+  <script>
+    lucide.createIcons();
+  </script>
+</body>
+</html>
