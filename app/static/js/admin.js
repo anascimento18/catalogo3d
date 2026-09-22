@@ -1,7 +1,8 @@
 // Script do Painel Administrativo 3D
 let adminCategories = [];
-let selectedFile3D = null;
+let selectedFiles3D = [];
 let selectedFileImg = null;
+let selectedGalleryImgs = [];
 
 document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
@@ -12,11 +13,12 @@ document.addEventListener('DOMContentLoaded', () => {
   setupLogout();
 });
 
-// 1. Gerenciamento de Abas
+// 1. Controle das Abas (Modelos / Novo Upload / Pedidos)
 function setupTabs() {
-  document.querySelectorAll('.admin-tab').forEach(tab => {
+  const tabs = document.querySelectorAll('.admin-tab');
+  tabs.forEach(tab => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+      tabs.forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
 
       tab.classList.add('active');
@@ -34,21 +36,25 @@ function setupTabs() {
   });
 }
 
-// 2. Carrega Categorias para o Select de Upload
+// 2. Carrega Categorias no Select de Upload
 async function loadAdminCategories() {
+  const select = document.getElementById('modelCategory');
+  if (!select) return;
+
   try {
     const res = await fetch('/api/public/categories');
-    adminCategories = await res.json();
-    const select = document.getElementById('modelCategory');
-    if (select) {
-      select.innerHTML = adminCategories.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-    }
+    const categories = await res.json();
+    adminCategories = categories;
+
+    select.innerHTML = categories.map(c => `
+      <option value="${c.id}">${c.name}</option>
+    `).join('');
   } catch (err) {
     console.error('Erro ao carregar categorias:', err);
   }
 }
 
-// 3. Carrega Modelos Cadastrados
+// 3. Carrega Lista de Modelos Cadastrados
 async function loadAdminModels() {
   const tbody = document.getElementById('modelsTableBody');
   if (!tbody) return;
@@ -74,6 +80,14 @@ async function loadAdminModels() {
         ? `<span style="color:#22c55e;font-weight:600;">Sim</span>` 
         : `<span style="color:#eab308;font-weight:600;">Sob Consulta</span>`;
 
+      const partsInfo = m.parts_count && m.parts_count > 1 
+        ? `<span style="color:#38bdf8;font-weight:600;">📦 ${m.parts_count} peças</span> • ` 
+        : '';
+
+      const photosInfo = m.gallery_images && m.gallery_images.length > 0
+        ? `<span style="color:#a1a1aa;">📸 ${m.gallery_images.length + 1} fotos</span> • `
+        : '';
+
       return `
         <tr>
           <td style="width: 60px;">
@@ -81,7 +95,7 @@ async function loadAdminModels() {
           </td>
           <td>
             <strong>${escapeHtml(m.title)}</strong><br>
-            <small style="color: #71717a;">${escapeHtml(m.file_3d_filename)}</small>
+            <small style="color: #71717a;">${partsInfo}${photosInfo}${escapeHtml(m.file_3d_filename)}</small>
           </td>
           <td>${escapeHtml(m.category_name)}</td>
           <td><span class="badge-tag">${m.file_format}</span></td>
@@ -117,14 +131,16 @@ async function deleteModel(id, title) {
 
   try {
     const res = await fetch(`/api/admin/models/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Falha ao excluir modelo.');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao excluir');
+
     loadAdminModels();
   } catch (err) {
-    alert('Erro: ' + err.message);
+    alert(err.message || 'Erro ao excluir');
   }
 }
 
-// 5. Configuração dos Dropzones para Upload
+// 5. Configuração dos Dropzones com Suporte a Múltiplos Arquivos e Galeria
 function setupDropzones() {
   const drop3D = document.getElementById('dropzone3D');
   const input3D = document.getElementById('inputFile3D');
@@ -134,16 +150,25 @@ function setupDropzones() {
   const inputImg = document.getElementById('inputFileImg');
   const labelImg = document.getElementById('labelImg');
 
-  // Dropzone 3D
+  const dropGallery = document.getElementById('dropzoneGallery');
+  const inputGallery = document.getElementById('inputFileGallery');
+  const labelGallery = document.getElementById('labelGallery');
+
+  // Dropzone 3D (Múltiplas Peças / Arquivos)
   drop3D.addEventListener('click', () => input3D.click());
   input3D.addEventListener('change', () => {
     if (input3D.files.length) {
-      selectedFile3D = input3D.files[0];
-      label3D.innerHTML = `<span style="color:#22c55e;">✓ ${selectedFile3D.name}</span> (${(selectedFile3D.size/1024/1024).toFixed(2)} MB)`;
+      selectedFiles3D = Array.from(input3D.files);
+      if (selectedFiles3D.length === 1) {
+        label3D.innerHTML = `<span style="color:#22c55e;">✓ ${selectedFiles3D[0].name}</span> (${(selectedFiles3D[0].size/1024/1024).toFixed(2)} MB)`;
+      } else {
+        const totalSize = (selectedFiles3D.reduce((acc, f) => acc + f.size, 0)/1024/1024).toFixed(2);
+        label3D.innerHTML = `<span style="color:#38bdf8;font-weight:700;">✓ ${selectedFiles3D.length} arquivos/peças selecionadas</span> (Total: ${totalSize} MB)`;
+      }
     }
   });
 
-  // Dropzone Imagem
+  // Dropzone Imagem de Capa
   dropImg.addEventListener('click', () => inputImg.click());
   inputImg.addEventListener('change', () => {
     if (inputImg.files.length) {
@@ -152,8 +177,22 @@ function setupDropzones() {
     }
   });
 
+  // Dropzone Fotos da Galeria (Múltiplas)
+  if (dropGallery && inputGallery) {
+    dropGallery.addEventListener('click', () => inputGallery.click());
+    inputGallery.addEventListener('change', () => {
+      if (inputGallery.files.length) {
+        selectedGalleryImgs = Array.from(inputGallery.files);
+        labelGallery.innerHTML = `<span style="color:#22c55e;font-weight:700;">✓ ${selectedGalleryImgs.length} foto(s) adicional(is) selecionada(s)</span>`;
+      }
+    });
+  }
+
   // Drag over effects
-  [drop3D, dropImg].forEach(zone => {
+  const allZones = [drop3D, dropImg];
+  if (dropGallery) allZones.push(dropGallery);
+
+  allZones.forEach(zone => {
     zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
     zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
   });
@@ -162,9 +201,14 @@ function setupDropzones() {
     e.preventDefault();
     drop3D.classList.remove('dragover');
     if (e.dataTransfer.files.length) {
-      selectedFile3D = e.dataTransfer.files[0];
+      selectedFiles3D = Array.from(e.dataTransfer.files);
       input3D.files = e.dataTransfer.files;
-      label3D.innerHTML = `<span style="color:#22c55e;">✓ ${selectedFile3D.name}</span> (${(selectedFile3D.size/1024/1024).toFixed(2)} MB)`;
+      if (selectedFiles3D.length === 1) {
+        label3D.innerHTML = `<span style="color:#22c55e;">✓ ${selectedFiles3D[0].name}</span> (${(selectedFiles3D[0].size/1024/1024).toFixed(2)} MB)`;
+      } else {
+        const totalSize = (selectedFiles3D.reduce((acc, f) => acc + f.size, 0)/1024/1024).toFixed(2);
+        label3D.innerHTML = `<span style="color:#38bdf8;font-weight:700;">✓ ${selectedFiles3D.length} arquivos/peças selecionadas</span> (Total: ${totalSize} MB)`;
+      }
     }
   });
 
@@ -177,6 +221,18 @@ function setupDropzones() {
       labelImg.innerHTML = `<span style="color:#22c55e;">✓ ${selectedFileImg.name}</span> (${(selectedFileImg.size/1024).toFixed(1)} KB)`;
     }
   });
+
+  if (dropGallery && inputGallery) {
+    dropGallery.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropGallery.classList.remove('dragover');
+      if (e.dataTransfer.files.length) {
+        selectedGalleryImgs = Array.from(e.dataTransfer.files);
+        inputGallery.files = e.dataTransfer.files;
+        labelGallery.innerHTML = `<span style="color:#22c55e;font-weight:700;">✓ ${selectedGalleryImgs.length} foto(s) adicional(is) selecionada(s)</span>`;
+      }
+    });
+  }
 }
 
 // 6. Formulário de Upload
@@ -189,12 +245,12 @@ function setupUploadForm() {
     e.preventDefault();
     alertBox.style.display = 'none';
 
-    if (!selectedFile3D) {
-      alert('Por favor, selecione um arquivo 3D (.STL, .3MF, etc.).');
+    if (!selectedFiles3D || selectedFiles3D.length === 0) {
+      alert('Por favor, selecione pelo menos um arquivo 3D (.STL, .3MF, etc.).');
       return;
     }
     if (!selectedFileImg) {
-      alert('Por favor, selecione a foto de capa do modelo.');
+      alert('Por favor, selecione a foto de capa principal do modelo.');
       return;
     }
 
@@ -217,8 +273,19 @@ function setupUploadForm() {
     formData.append('is_featured', isFeatured);
     formData.append('order_count', orderCount);
     formData.append('description', desc);
-    formData.append('file_3d', selectedFile3D);
+
+    // Adiciona todos os arquivos 3D
+    selectedFiles3D.forEach(f => {
+      formData.append('files_3d', f);
+    });
+
+    // Foto de Capa (Primária)
     formData.append('image', selectedFileImg);
+
+    // Fotos Adicionais da Galeria
+    selectedGalleryImgs.forEach(f => {
+      formData.append('gallery_images', f);
+    });
 
     try {
       const res = await fetch('/api/admin/models', {
@@ -230,25 +297,31 @@ function setupUploadForm() {
       if (!res.ok) throw new Error(data.detail || 'Erro no upload');
 
       // Sucesso
-      alertBox.textContent = `Modelo "${title}" cadastrado com sucesso!`;
+      const partsMsg = data.parts_count > 1 ? ` (${data.parts_count} peças compactadas)` : '';
+      const galMsg = data.gallery_count > 1 ? ` com ${data.gallery_count} fotos na galeria` : '';
+      alertBox.textContent = `Modelo "${title}" cadastrado com sucesso!${partsMsg}${galMsg}`;
       alertBox.style.background = 'rgba(34, 197, 94, 0.15)';
       alertBox.style.border = '1px solid rgba(34, 197, 94, 0.3)';
       alertBox.style.color = '#86efac';
       alertBox.style.display = 'block';
 
       form.reset();
-      selectedFile3D = null;
+      selectedFiles3D = [];
       selectedFileImg = null;
-      document.getElementById('label3D').textContent = 'Arraste o arquivo 3D aqui ou clique para selecionar';
-      document.getElementById('labelImg').textContent = 'Arraste a foto aqui ou clique para selecionar';
+      selectedGalleryImgs = [];
+      document.getElementById('label3D').textContent = 'Arraste os arquivos 3D ou .ZIP aqui ou clique para selecionar';
+      document.getElementById('labelImg').textContent = 'Arraste a foto de capa aqui ou clique para selecionar';
+      if (document.getElementById('labelGallery')) {
+        document.getElementById('labelGallery').textContent = 'Arraste fotos adicionais para a galeria ou clique para selecionar';
+      }
 
-      // Volta para a aba de modelos após 1.5s
+      // Volta para a aba de modelos após 1.2s
       setTimeout(() => {
         document.querySelector('.admin-tab[data-tab="models"]').click();
       }, 1200);
 
     } catch (err) {
-      alertBox.textContent = 'Erro: ' + err.message;
+      alertBox.textContent = `Erro ao salvar: ${err.message}`;
       alertBox.style.background = 'rgba(239, 35, 60, 0.15)';
       alertBox.style.border = '1px solid rgba(239, 35, 60, 0.3)';
       alertBox.style.color = '#fca5a5';

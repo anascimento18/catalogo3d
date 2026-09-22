@@ -1,8 +1,10 @@
 import os
+import json
+import zipfile
 import shutil
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, status, Request, Response, UploadFile, File, Form
@@ -131,13 +133,26 @@ def get_public_catalog(
     # Monta resposta estritamente filtrada
     results = []
     for m in models:
+        # Processa galeria de fotos
+        gallery_list = []
+        try:
+            raw_gallery = json.loads(m.gallery_images or "[]")
+            gallery_list = [f"/api/public/images/{img}" for img in raw_gallery if img]
+        except Exception:
+            gallery_list = []
+            
+        primary_url = f"/api/public/images/{m.image_filename}"
+        full_gallery = [primary_url] + [g for g in gallery_list if g != primary_url]
+
         item = {
             "id": m.id,
             "title": m.title,
             "description": m.description,
             "category_id": m.category_id,
             "category_name": m.category_name,
-            "image_url": f"/api/public/images/{m.image_filename}",
+            "image_url": primary_url,
+            "gallery": full_gallery,
+            "parts_count": m.parts_count or 1,
             "file_format": m.file_format,
             "show_price": m.show_price,
             "price": m.price if m.show_price else None,
@@ -280,15 +295,30 @@ def get_admin_models(
 ):
     """Lista completa de modelos com metadados confidenciais para o Admin."""
     models = db.query(Model3D).order_by(Model3D.id.desc()).all()
-    return [
-        {
+    results = []
+    for m in models:
+        gallery_list = []
+        files_list = []
+        try:
+            gallery_list = json.loads(m.gallery_images or "[]")
+        except Exception:
+            gallery_list = []
+        try:
+            files_list = json.loads(m.files_3d_list or "[]")
+        except Exception:
+            files_list = []
+
+        results.append({
             "id": m.id,
             "title": m.title,
             "description": m.description,
             "category_id": m.category_id,
             "category_name": m.category_name,
             "image_filename": m.image_filename,
+            "gallery_images": gallery_list,
             "file_3d_filename": m.file_3d_filename,
+            "files_3d_list": files_list,
+            "parts_count": m.parts_count or 1,
             "file_format": m.file_format,
             "file_size_bytes": m.file_size_bytes,
             "price": m.price,
@@ -297,9 +327,8 @@ def get_admin_models(
             "is_featured": m.is_featured,
             "is_public": m.is_public,
             "created_at": m.created_at.strftime("%d/%m/%Y %H:%M") if m.created_at else ""
-        }
-        for m in models
-    ]
+        })
+    return results
 
 @app.post("/api/admin/models")
 async def upload_model(
@@ -310,43 +339,107 @@ async def upload_model(
     show_price: bool = Form(True),
     order_count: int = Form(15),
     is_featured: bool = Form(False),
-    file_3d: UploadFile = File(...),
     image: UploadFile = File(...),
+    files_3d: List[UploadFile] = File(default=[]),
+    file_3d: Optional[UploadFile] = File(None),
+    gallery_images: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     admin: str = Depends(get_current_admin)
 ):
-    """Cadastro de novo modelo 3D com foto e metadados."""
-    # Valida extensões
-    ext_3d = Path(file_3d.filename).suffix.lower()
-    ext_img = Path(image.filename).suffix.lower()
+    """Cadastro de novo modelo 3D com suporte a múltiplas peças e galeria de fotos."""
+    # Consolida arquivos 3D (suporta tanto files_3d múltiplos quanto file_3d único)
+    all_3d_files = [f for f in files_3d if f and f.filename]
+    if file_3d and file_3d.filename and file_3d not in all_3d_files:
+        all_3d_files.append(file_3d)
 
-    if ext_3d not in ALLOWED_3D_EXTENSIONS:
-        raise HTTPException(status_code=400, detail=f"Extensão 3D não suportada ({ext_3d}).")
+    if not all_3d_files:
+        raise HTTPException(status_code=400, detail="Pelo menos um arquivo 3D deve ser enviado.")
+
+    # Valida imagem de capa
+    ext_img = Path(image.filename).suffix.lower()
     if ext_img not in ALLOWED_IMG_EXTENSIONS:
-        raise HTTPException(status_code=400, detail=f"Extensão de imagem não suportada ({ext_img}).")
+        raise HTTPException(status_code=400, detail=f"Extensão de imagem principal não suportada ({ext_img}).")
 
     category = db.query(Category).filter(Category.id == category_id).first()
     category_name = category.name if category else "Geral"
 
-    # Salva arquivos com nomes seguros únicos
     unique_id = uuid.uuid4().hex[:8]
     clean_title = "".join(c for c in title if c.isalnum() or c in ("-", "_", " ")).strip().replace(" ", "_")
-    
-    saved_3d_name = f"{clean_title}_{unique_id}{ext_3d}"
-    saved_img_name = f"{clean_title}_{unique_id}{ext_img}"
 
-    target_3d = MODEL_DIR / saved_3d_name
+    # 1. Salva Foto de Capa (Primária)
+    saved_img_name = f"{clean_title}_{unique_id}_cover{ext_img}"
     target_img = IMAGE_DIR / saved_img_name
-
-    # Gravação do arquivo 3D
-    with open(target_3d, "wb") as f:
-        shutil.copyfileobj(file_3d.file, f)
-
-    # Gravação da Imagem
     with open(target_img, "wb") as f:
         shutil.copyfileobj(image.file, f)
 
-    file_size = target_3d.stat().st_size
+    # 2. Salva Fotos Secundárias da Galeria
+    saved_gallery_filenames = []
+    for idx, gal_file in enumerate(gallery_images):
+        if not gal_file or not gal_file.filename:
+            continue
+        g_ext = Path(gal_file.filename).suffix.lower()
+        if g_ext in ALLOWED_IMG_EXTENSIONS:
+            g_name = f"{clean_title}_{unique_id}_gal_{idx+1}{g_ext}"
+            g_target = IMAGE_DIR / g_name
+            with open(g_target, "wb") as f:
+                shutil.copyfileobj(gal_file.file, f)
+            saved_gallery_filenames.append(g_name)
+
+    # 3. Salva Arquivo(s) 3D
+    parts_metadata = []
+    if len(all_3d_files) == 1:
+        f_single = all_3d_files[0]
+        ext_3d = Path(f_single.filename).suffix.lower()
+        if ext_3d not in ALLOWED_3D_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Extensão 3D não suportada ({ext_3d}).")
+
+        saved_3d_name = f"{clean_title}_{unique_id}{ext_3d}"
+        target_3d = MODEL_DIR / saved_3d_name
+        with open(target_3d, "wb") as f:
+            shutil.copyfileobj(f_single.file, f)
+
+        file_size = target_3d.stat().st_size
+        parts_count = 1
+
+        # Se for um .ZIP único, inspeciona quantas peças tem dentro
+        if ext_3d == ".zip":
+            try:
+                with zipfile.ZipFile(target_3d, "r") as zf:
+                    pieces = [n for n in zf.namelist() if any(n.lower().endswith(e) for e in ALLOWED_3D_EXTENSIONS)]
+                    if pieces:
+                        parts_count = len(pieces)
+                        parts_metadata = [{"name": Path(p).name, "size": 0} for p in pieces]
+            except Exception:
+                pass
+        else:
+            parts_metadata = [{"name": f_single.filename, "size": file_size}]
+
+        format_str = ext_3d.lstrip(".").upper()
+    else:
+        # Múltiplos arquivos 3D: salva cada um e gera um .ZIP consolidado
+        saved_part_files = []
+        for idx, f_part in enumerate(all_3d_files):
+            p_ext = Path(f_part.filename).suffix.lower()
+            if p_ext not in ALLOWED_3D_EXTENSIONS:
+                continue
+            safe_orig_name = Path(f_part.filename).name
+            p_name = f"{clean_title}_{unique_id}_part_{idx+1}_{safe_orig_name}"
+            p_target = MODEL_DIR / p_name
+            with open(p_target, "wb") as f:
+                shutil.copyfileobj(f_part.file, f)
+            p_size = p_target.stat().st_size
+            saved_part_files.append((p_target, safe_orig_name))
+            parts_metadata.append({"name": safe_orig_name, "size": p_size})
+
+        saved_3d_name = f"{clean_title}_{unique_id}_bundle.zip"
+        target_zip = MODEL_DIR / saved_3d_name
+        with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p_path, p_orig_name in saved_part_files:
+                zf.write(p_path, arcname=p_orig_name)
+
+        file_size = target_zip.stat().st_size
+        parts_count = len(parts_metadata)
+        format_str = "BUNDLE ZIP"
 
     new_model = Model3D(
         title=title,
@@ -354,8 +447,11 @@ async def upload_model(
         category_id=category_id,
         category_name=category_name,
         image_filename=saved_img_name,
+        gallery_images=json.dumps(saved_gallery_filenames),
         file_3d_filename=saved_3d_name,
-        file_format=ext_3d.lstrip(".").upper(),
+        files_3d_list=json.dumps(parts_metadata),
+        parts_count=parts_count,
+        file_format=format_str,
         file_size_bytes=file_size,
         price=price,
         show_price=show_price,
@@ -367,7 +463,13 @@ async def upload_model(
     db.commit()
     db.refresh(new_model)
 
-    return {"ok": True, "id": new_model.id, "title": new_model.title}
+    return {
+        "ok": True,
+        "id": new_model.id,
+        "title": new_model.title,
+        "parts_count": parts_count,
+        "gallery_count": len(saved_gallery_filenames) + 1
+    }
 
 @app.delete("/api/admin/models/{model_id}")
 def delete_model(

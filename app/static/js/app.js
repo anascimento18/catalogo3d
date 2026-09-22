@@ -97,15 +97,25 @@ function renderModels(models) {
       ? `<span class="badge-tag badge-featured">★ Mais Pedido</span>` 
       : '';
 
+    const galleryCountBadge = m.gallery && m.gallery.length > 1
+      ? `<span class="badge-tag" style="background: rgba(0,0,0,0.6);"><i data-lucide="camera" style="width:11px;height:11px;margin-right:3px;"></i>${m.gallery.length} fotos</span>`
+      : '';
+
+    const partsBadge = m.parts_count && m.parts_count > 1
+      ? `<span class="badge-tag" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">${m.parts_count} peças</span>`
+      : '';
+
     return `
       <article class="model-card animate-fade-in" data-id="${m.id}">
         <div class="card-media">
           <img src="${m.image_url}" alt="${escapeHtml(m.title)}" class="card-img" loading="lazy">
-          <div class="badge-top-left">
+          <div class="badge-top-left" style="display: flex; gap: 4px; flex-wrap: wrap;">
             <span class="badge-tag">${m.file_format || '3D'}</span>
+            ${partsBadge}
           </div>
-          <div class="badge-top-right">
+          <div class="badge-top-right" style="display: flex; gap: 4px; flex-direction: column; align-items: flex-end;">
             ${featuredBadge}
+            ${galleryCountBadge}
           </div>
         </div>
 
@@ -164,6 +174,46 @@ function openOrderModal(modelId) {
     priceEl.textContent = `R$ ${model.price.toFixed(2).replace('.', ',')}`;
   } else {
     priceEl.textContent = 'Sob Consulta';
+  }
+
+  // Gerencia Galeria de Fotos no Modal
+  const gallery = (model.gallery && model.gallery.length > 0) ? model.gallery : [model.image_url];
+  const thumbsContainer = document.getElementById('modalThumbnails');
+  
+  if (gallery.length > 1) {
+    thumbsContainer.style.display = 'flex';
+    thumbsContainer.innerHTML = gallery.map((imgUrl, i) => `
+      <div class="thumb-item ${i === 0 ? 'active' : ''}" data-url="${imgUrl}" title="Ver foto ${i+1}">
+        <img src="${imgUrl}" alt="Miniatura ${i+1}">
+      </div>
+    `).join('');
+
+    thumbsContainer.querySelectorAll('.thumb-item').forEach(thumb => {
+      thumb.addEventListener('click', () => {
+        thumbsContainer.querySelectorAll('.thumb-item').forEach(t => t.classList.remove('active'));
+        thumb.classList.add('active');
+        const modalImg = document.getElementById('modalImg');
+        modalImg.style.opacity = '0.3';
+        setTimeout(() => {
+          modalImg.src = thumb.dataset.url;
+          modalImg.style.opacity = '1';
+        }, 120);
+      });
+    });
+  } else {
+    thumbsContainer.style.display = 'none';
+    thumbsContainer.innerHTML = '';
+  }
+
+  // Badge de Peças / Componentes
+  const partsBadge = document.getElementById('modalPartsBadge');
+  if (partsBadge) {
+    if (model.parts_count && model.parts_count > 1) {
+      partsBadge.style.display = 'inline-flex';
+      partsBadge.textContent = `📦 ${model.parts_count} peças no projeto`;
+    } else {
+      partsBadge.style.display = 'none';
+    }
   }
 
   // Reseta visualização do modal

@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey, text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from app.config import DATABASE_URL, ADMIN_USERNAME, ADMIN_PASSWORD
 
@@ -26,8 +26,11 @@ class Model3D(Base):
     category_name = Column(String(100), default="Geral")
     
     # Arquivos (Salvos no volume em disco)
-    image_filename = Column(String(255), nullable=False)
-    file_3d_filename = Column(String(255), nullable=False)
+    image_filename = Column(String(255), nullable=False)   # Foto de Capa (Primária)
+    gallery_images = Column(Text, default="[]")             # Array JSON de fotos adicionais da galeria
+    file_3d_filename = Column(String(255), nullable=False) # Arquivo 3D ou pacote .ZIP com todas as peças
+    files_3d_list = Column(Text, default="[]")              # Array JSON com cada arquivo 3D do projeto
+    parts_count = Column(Integer, default=1)                # Quantidade de peças componentes
     file_format = Column(String(20), default="STL")
     file_size_bytes = Column(Integer, default=0)
     
@@ -71,6 +74,26 @@ def get_db():
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    
+    # Migrações automáticas de colunas se faltarem
+    with engine.connect() as conn:
+        for col, col_type, default in [
+            ("gallery_images", "TEXT", "'[]'"),
+            ("files_3d_list", "TEXT", "'[]'"),
+            ("parts_count", "INTEGER", "1"),
+        ]:
+            try:
+                # Sintaxe PostgreSQL
+                conn.execute(text(f"ALTER TABLE models ADD COLUMN IF NOT EXISTS {col} {col_type} DEFAULT {default};"))
+                conn.commit()
+            except Exception:
+                try:
+                    # Sintaxe SQLite
+                    conn.execute(text(f"ALTER TABLE models ADD COLUMN {col} {col_type} DEFAULT {default};"))
+                    conn.commit()
+                except Exception:
+                    pass
+                
     db = SessionLocal()
     try:
         # Seed de categorias padrão se não existirem

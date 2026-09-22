@@ -135,13 +135,26 @@
 
       <div class="modal-body" id="modalFormContainer">
         
-        <!-- Preview do Modelo Escolhido -->
-        <div class="modal-item-preview">
-          <img src="" id="modalImg" class="modal-preview-img" alt="Foto do Modelo">
-          <div class="modal-preview-info">
-            <h4 id="modalModelName">Nome do Modelo</h4>
-            <p id="modalModelCategory" style="font-size: 12px; color: #a1a1aa; margin-bottom: 4px;">Categoria</p>
-            <p id="modalModelPrice" style="font-weight: 700; color: #22c55e;"></p>
+        <!-- Galeria Interativa do Modelo Escolhido -->
+        <div class="modal-gallery-box">
+          <div class="modal-main-img-wrap">
+            <img src="" id="modalImg" class="modal-main-img" alt="Foto do Modelo">
+          </div>
+          <!-- Miniaturas Navegáveis -->
+          <div class="modal-thumbs-row" id="modalThumbnails" style="display: none;"></div>
+          
+          <div class="modal-details-strip">
+            <div>
+              <h4 id="modalModelName" style="font-size: 16px; font-weight: 700; margin-bottom: 4px;">Nome do Modelo</h4>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span id="modalModelCategory" style="font-size: 12px; color: #a1a1aa;">Categoria</span>
+                <span id="modalPartsBadge" class="parts-badge" style="display: none;"></span>
+              </div>
+            </div>
+            <div style="text-align: right;">
+              <span style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; display: block;">Valor</span>
+              <span id="modalModelPrice" style="font-weight: 800; color: #22c55e; font-size: 18px; font-family: var(--font-display);"></span>
+            </div>
           </div>
         </div>
 
