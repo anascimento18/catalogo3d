@@ -116,6 +116,8 @@
       padding: 30px;
       text-align: center;
       cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
       transition: all 0.2s ease;
       background: rgba(9, 9, 11, 0.4);
     }
@@ -181,14 +183,12 @@
         <table class="admin-table">
           <thead>
             <tr>
-              <th>Foto</th>
-              <th>Nome do Modelo</th>
+              <th>Preview</th>
+              <th>Título</th>
               <th>Categoria</th>
-              <th>Formato</th>
-              <th>Preço (R$)</th>
-              <th>Preço Visível?</th>
-              <th>Pedidos (Prova)</th>
-              <th style="text-align: right;">Ações</th>
+              <th>Preço</th>
+              <th>Downloads</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody id="modelsTableBody">
@@ -211,32 +211,40 @@
           
           <!-- Dropzone Arquivo 3D -->
           <div class="form-group">
-            <label>1. Arquivo(s) 3D Bruto (.STL, .3MF, .OBJ, .STEP, .ZIP) * <span style="font-size: 12px; color: #38bdf8; font-weight: normal;">(Pode selecionar múltiplas peças de uma vez)</span></label>
-            <div class="dropzone" id="dropzone3D">
+            <label style="font-weight: 600; margin-bottom: 6px; display: block;">1. Arquivo(s) 3D Bruto (.STL, .3MF, .OBJ, .STEP, .ZIP) * <span style="font-size: 12px; color: #38bdf8; font-weight: normal;">(Pode selecionar múltiplas peças de uma vez)</span></label>
+            <label for="inputFile3D" class="dropzone" id="dropzone3D" style="display: block;">
               <i data-lucide="file-box" style="width: 36px; height: 36px; color: #60a5fa; margin: 0 auto 8px;"></i>
               <p id="label3D" style="font-size: 14px; font-weight: 600;">Arraste os arquivos 3D ou .ZIP aqui ou clique para selecionar</p>
-              <input type="file" id="inputFile3D" style="display: none;" accept=".stl,.3mf,.obj,.step,.stp,.iges,.igs,.fbx,.gltf,.glb,.blend,.scad,.zip,.rar,.7z" multiple required>
-            </div>
+            </label>
+            <input type="file" id="inputFile3D" style="display: none;" accept=".stl,.3mf,.obj,.step,.stp,.iges,.igs,.fbx,.gltf,.glb,.blend,.scad,.zip,.rar,.7z" multiple required>
           </div>
 
           <!-- Dropzone Imagem de Capa -->
           <div class="form-group">
-            <label>2. Foto de Capa Principal (.JPG, .PNG, .WEBP) * <span style="font-size: 12px; color: #ef233c; font-weight: normal;">(Aparece na vitrine)</span></label>
-            <div class="dropzone" id="dropzoneImg">
+            <label style="font-weight: 600; margin-bottom: 6px; display: block;">2. Foto de Capa Principal (.JPG, .PNG, .WEBP) * <span style="font-size: 12px; color: #ef233c; font-weight: normal;">(Aparece na vitrine)</span></label>
+            <label for="inputFileImg" class="dropzone" id="dropzoneImg" style="display: block;">
               <i data-lucide="image" style="width: 36px; height: 36px; color: #ef233c; margin: 0 auto 8px;"></i>
               <p id="labelImg" style="font-size: 14px; font-weight: 600;">Arraste a foto de capa aqui ou clique para selecionar</p>
-              <input type="file" id="inputFileImg" style="display: none;" accept="image/*" required>
+            </label>
+            <input type="file" id="inputFileImg" style="display: none;" accept="image/*" required>
+            <div id="coverPreviewContainer" style="display: none; margin-top: 10px; align-items: center; gap: 12px; background: rgba(9, 9, 11, 0.5); padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-subtle);">
+              <img id="coverPreviewImg" src="" style="width: 60px; height: 60px; object-fit: cover; border-radius: 6px; border: 1px solid #ef233c;">
+              <div style="flex: 1; min-width: 0;">
+                <p id="coverPreviewName" style="font-size: 13.5px; font-weight: 600; color: #fff; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></p>
+                <p id="coverPreviewSize" style="font-size: 12px; color: #a1a1aa; margin: 2px 0 0;"></p>
+              </div>
             </div>
           </div>
 
           <!-- Dropzone Fotos Secundárias da Galeria -->
           <div class="form-group">
-            <label>3. Fotos Adicionais da Galeria <span style="font-size: 12px; color: #a1a1aa; font-weight: normal;">(Opcional - selecione quantas fotos quiser para o carrossel)</span></label>
-            <div class="dropzone" id="dropzoneGallery" style="border-style: dashed; padding: 20px;">
+            <label style="font-weight: 600; margin-bottom: 6px; display: block;">3. Fotos Adicionais da Galeria <span style="font-size: 12px; color: #a1a1aa; font-weight: normal;">(Opcional - selecione quantas fotos quiser para o carrossel)</span></label>
+            <label for="inputFileGallery" class="dropzone" id="dropzoneGallery" style="border-style: dashed; padding: 20px; display: block;">
               <i data-lucide="images" style="width: 30px; height: 30px; color: #a1a1aa; margin: 0 auto 6px;"></i>
               <p id="labelGallery" style="font-size: 13.5px; font-weight: 500; color: #a1a1aa;">Arraste fotos adicionais para a galeria ou clique para selecionar</p>
-              <input type="file" id="inputFileGallery" style="display: none;" accept="image/*" multiple>
-            </div>
+            </label>
+            <input type="file" id="inputFileGallery" style="display: none;" accept="image/*" multiple>
+            <div id="galleryPreviewList" style="display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;"></div>
           </div>
 
           <div class="form-group">
@@ -322,7 +330,7 @@
 
   </div>
 
-  <script src="/static/js/admin.js"></script>
+  <script src="/static/js/admin.js?v=3.2"></script>
   <script>
     lucide.createIcons();
   </script>

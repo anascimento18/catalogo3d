@@ -154,86 +154,164 @@ function setupDropzones() {
   const inputGallery = document.getElementById('inputFileGallery');
   const labelGallery = document.getElementById('labelGallery');
 
-  // Dropzone 3D (Múltiplas Peças / Arquivos)
-  drop3D.addEventListener('click', () => input3D.click());
-  input3D.addEventListener('change', () => {
-    if (input3D.files.length) {
-      selectedFiles3D = Array.from(input3D.files);
-      if (selectedFiles3D.length === 1) {
-        label3D.innerHTML = `<span style="color:#22c55e;">✓ ${selectedFiles3D[0].name}</span> (${(selectedFiles3D[0].size/1024/1024).toFixed(2)} MB)`;
-      } else {
-        const totalSize = (selectedFiles3D.reduce((acc, f) => acc + f.size, 0)/1024/1024).toFixed(2);
-        label3D.innerHTML = `<span style="color:#38bdf8;font-weight:700;">✓ ${selectedFiles3D.length} arquivos/peças selecionadas</span> (Total: ${totalSize} MB)`;
-      }
-    }
-  });
-
-  // Dropzone Imagem de Capa
-  dropImg.addEventListener('click', () => inputImg.click());
-  inputImg.addEventListener('change', () => {
-    if (inputImg.files.length) {
-      selectedFileImg = inputImg.files[0];
-      labelImg.innerHTML = `<span style="color:#22c55e;">✓ ${selectedFileImg.name}</span> (${(selectedFileImg.size/1024).toFixed(1)} KB)`;
-    }
-  });
-
-  // Dropzone Fotos da Galeria (Múltiplas)
-  if (dropGallery && inputGallery) {
-    dropGallery.addEventListener('click', () => inputGallery.click());
-    inputGallery.addEventListener('change', () => {
-      if (inputGallery.files.length) {
-        selectedGalleryImgs = Array.from(inputGallery.files);
-        labelGallery.innerHTML = `<span style="color:#22c55e;font-weight:700;">✓ ${selectedGalleryImgs.length} foto(s) adicional(is) selecionada(s)</span>`;
+  // Input 3D
+  if (input3D) {
+    input3D.addEventListener('change', () => {
+      if (input3D.files && input3D.files.length) {
+        handle3DFiles(input3D.files);
       }
     });
   }
 
-  // Drag over effects
-  const allZones = [drop3D, dropImg];
-  if (dropGallery) allZones.push(dropGallery);
+  // Input Imagem Capa
+  if (inputImg) {
+    inputImg.addEventListener('change', () => {
+      if (inputImg.files && inputImg.files.length) {
+        handleCoverImage(inputImg.files[0]);
+      }
+    });
+  }
+
+  // Input Fotos da Galeria (Múltiplas)
+  if (inputGallery) {
+    inputGallery.addEventListener('change', () => {
+      if (inputGallery.files && inputGallery.files.length) {
+        addGalleryFiles(Array.from(inputGallery.files));
+        inputGallery.value = ''; // Permite selecionar mais fotos ou re-selecionar
+      }
+    });
+  }
+
+  // Drag and Drop (Efeitos visuais)
+  const allZones = [drop3D, dropImg, dropGallery].filter(Boolean);
 
   allZones.forEach(zone => {
-    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
-    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+    zone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      zone.classList.add('dragover');
+    });
+    zone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      zone.classList.remove('dragover');
+    });
   });
 
-  drop3D.addEventListener('drop', (e) => {
-    e.preventDefault();
-    drop3D.classList.remove('dragover');
-    if (e.dataTransfer.files.length) {
-      selectedFiles3D = Array.from(e.dataTransfer.files);
-      input3D.files = e.dataTransfer.files;
-      if (selectedFiles3D.length === 1) {
-        label3D.innerHTML = `<span style="color:#22c55e;">✓ ${selectedFiles3D[0].name}</span> (${(selectedFiles3D[0].size/1024/1024).toFixed(2)} MB)`;
-      } else {
-        const totalSize = (selectedFiles3D.reduce((acc, f) => acc + f.size, 0)/1024/1024).toFixed(2);
-        label3D.innerHTML = `<span style="color:#38bdf8;font-weight:700;">✓ ${selectedFiles3D.length} arquivos/peças selecionadas</span> (Total: ${totalSize} MB)`;
+  // Drop Arquivos 3D
+  if (drop3D && input3D) {
+    drop3D.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      drop3D.classList.remove('dragover');
+      if (e.dataTransfer && e.dataTransfer.files.length) {
+        handle3DFiles(e.dataTransfer.files);
       }
-    }
-  });
+    });
+  }
 
-  dropImg.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropImg.classList.remove('dragover');
-    if (e.dataTransfer.files.length) {
-      selectedFileImg = e.dataTransfer.files[0];
-      inputImg.files = e.dataTransfer.files;
-      labelImg.innerHTML = `<span style="color:#22c55e;">✓ ${selectedFileImg.name}</span> (${(selectedFileImg.size/1024).toFixed(1)} KB)`;
-    }
-  });
+  // Drop Foto Capa
+  if (dropImg && inputImg) {
+    dropImg.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropImg.classList.remove('dragover');
+      if (e.dataTransfer && e.dataTransfer.files.length) {
+        handleCoverImage(e.dataTransfer.files[0]);
+      }
+    });
+  }
 
+  // Drop Fotos Galeria
   if (dropGallery && inputGallery) {
     dropGallery.addEventListener('drop', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       dropGallery.classList.remove('dragover');
-      if (e.dataTransfer.files.length) {
-        selectedGalleryImgs = Array.from(e.dataTransfer.files);
-        inputGallery.files = e.dataTransfer.files;
-        labelGallery.innerHTML = `<span style="color:#22c55e;font-weight:700;">✓ ${selectedGalleryImgs.length} foto(s) adicional(is) selecionada(s)</span>`;
+      if (e.dataTransfer && e.dataTransfer.files.length) {
+        addGalleryFiles(Array.from(e.dataTransfer.files));
       }
     });
   }
 }
+
+// Manipulador de Arquivos 3D
+function handle3DFiles(files) {
+  if (!files || files.length === 0) return;
+  selectedFiles3D = Array.from(files);
+  const label3D = document.getElementById('label3D');
+  if (!label3D) return;
+  if (selectedFiles3D.length === 1) {
+    label3D.innerHTML = `<span style="color:#22c55e;font-weight:700;">✓ ${selectedFiles3D[0].name}</span> (${(selectedFiles3D[0].size/1024/1024).toFixed(2)} MB)`;
+  } else {
+    const totalSize = (selectedFiles3D.reduce((acc, f) => acc + f.size, 0)/1024/1024).toFixed(2);
+    label3D.innerHTML = `<span style="color:#38bdf8;font-weight:700;">✓ ${selectedFiles3D.length} peças/arquivos selecionados</span> (Total: ${totalSize} MB)`;
+  }
+}
+
+// Manipulador de Foto de Capa
+function handleCoverImage(file) {
+  if (!file) return;
+  selectedFileImg = file;
+  const labelImg = document.getElementById('labelImg');
+  if (labelImg) {
+    labelImg.innerHTML = `<span style="color:#22c55e;font-weight:700;">✓ ${file.name}</span> (${(file.size/1024).toFixed(1)} KB)`;
+  }
+
+  const container = document.getElementById('coverPreviewContainer');
+  const imgEl = document.getElementById('coverPreviewImg');
+  const nameEl = document.getElementById('coverPreviewName');
+  const sizeEl = document.getElementById('coverPreviewSize');
+
+  if (container && imgEl) {
+    imgEl.src = URL.createObjectURL(file);
+    if (nameEl) nameEl.textContent = file.name;
+    if (sizeEl) sizeEl.textContent = `${(file.size/1024).toFixed(1)} KB`;
+    container.style.display = 'flex';
+  }
+}
+
+// Adiciona Fotos na Galeria (acumulativo)
+function addGalleryFiles(files) {
+  for (const f of files) {
+    if (f.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|svg)$/i.test(f.name)) {
+      if (!selectedGalleryImgs.some(existing => existing.name === f.name && existing.size === f.size)) {
+        selectedGalleryImgs.push(f);
+      }
+    }
+  }
+  renderGalleryPreviews();
+}
+
+// Renderiza miniaturas das fotos adicionais na tela
+function renderGalleryPreviews() {
+  const labelGallery = document.getElementById('labelGallery');
+  const previewList = document.getElementById('galleryPreviewList');
+  if (labelGallery) {
+    if (selectedGalleryImgs.length > 0) {
+      labelGallery.innerHTML = `<span style="color:#22c55e;font-weight:700;">✓ ${selectedGalleryImgs.length} foto(s) na galeria</span> <span style="color:#a1a1aa;font-size:12px;">(Clique para adicionar mais)</span>`;
+    } else {
+      labelGallery.textContent = 'Arraste fotos adicionais para a galeria ou clique para selecionar';
+    }
+  }
+  if (previewList) {
+    previewList.innerHTML = selectedGalleryImgs.map((file, i) => {
+      const url = URL.createObjectURL(file);
+      return `
+        <div style="position: relative; width: 66px; height: 66px; border-radius: 8px; overflow: hidden; border: 2px solid #ef233c; box-shadow: 0 4px 10px rgba(0,0,0,0.6); background: #000;">
+          <img src="${url}" style="width: 100%; height: 100%; object-fit: cover;" alt="Foto ${i+1}">
+          <button type="button" onclick="event.preventDefault(); event.stopPropagation(); removeGalleryImg(${i})" title="Remover esta foto" style="position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.85); color: #ef233c; border: 1px solid #ef233c; border-radius: 50%; width: 19px; height: 19px; font-size: 11px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1;">✕</button>
+          <span style="position: absolute; bottom: 2px; left: 2px; background: rgba(0,0,0,0.75); font-size: 9px; padding: 1px 4px; border-radius: 3px; color: #fff;">#${i+1}</span>
+        </div>
+      `;
+    }).join('');
+  }
+}
+
+window.removeGalleryImg = function(index) {
+  selectedGalleryImgs.splice(index, 1);
+  renderGalleryPreviews();
+};
 
 // 6. Formulário de Upload
 function setupUploadForm() {
@@ -309,6 +387,9 @@ function setupUploadForm() {
       selectedFiles3D = [];
       selectedFileImg = null;
       selectedGalleryImgs = [];
+      renderGalleryPreviews();
+      const coverPreview = document.getElementById('coverPreviewContainer');
+      if (coverPreview) coverPreview.style.display = 'none';
       document.getElementById('label3D').textContent = 'Arraste os arquivos 3D ou .ZIP aqui ou clique para selecionar';
       document.getElementById('labelImg').textContent = 'Arraste a foto de capa aqui ou clique para selecionar';
       if (document.getElementById('labelGallery')) {
