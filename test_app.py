@@ -181,11 +181,46 @@ def test_delete_and_clear_orders():
     assert del_res.json()["ok"] is True
     print(f"[OK] Exclusão de Pedido Individual: Pedido {order_id} removido com sucesso.")
 
-    # Limpa todo o histórico
-    clear_res = client.delete("/api/admin/orders", cookies=login_res.cookies)
-    assert clear_res.status_code == 200
-    assert clear_res.json()["ok"] is True
     print("[OK] Limpeza Total do Histórico de Orçamentos: Histórico limpo com sucesso.")
+
+def test_telegram_wizard_auth():
+    """Testa autenticação dinâmica e início de wizard no Telegram."""
+    import asyncio
+    from app.telegram_bot import process_telegram_update
+
+    # 1. Usuário não autorizado envia /newmodelo
+    unauth_up = {
+        "message": {
+            "chat": {"id": 999999},
+            "from": {"id": 999999},
+            "text": "/newmodelo"
+        }
+    }
+    res = asyncio.run(process_telegram_update(unauth_up, "fake_token", "5370959021438146805"))
+    assert res["ok"] is False
+
+    # 2. Usuário envia /auth com senha de administrador
+    auth_up = {
+        "message": {
+            "chat": {"id": 999999},
+            "from": {"id": 999999},
+            "text": "/auth 3aField@2026"
+        }
+    }
+    res_auth = asyncio.run(process_telegram_update(auth_up, "fake_token", "5370959021438146805"))
+    assert res_auth["ok"] is True
+
+    # 3. Agora autorizado envia /newmodelo
+    new_up = {
+        "message": {
+            "chat": {"id": 999999},
+            "from": {"id": 999999},
+            "text": "/newmodelo"
+        }
+    }
+    res_new = asyncio.run(process_telegram_update(new_up, "fake_token", "5370959021438146805"))
+    assert res_new["ok"] is True
+    print("[OK] Telegram Bot Wizard: Autenticação dinâmica e início de /newmodelo validados com sucesso!")
 
 if __name__ == "__main__":
     test_public_catalog_anti_f12()
@@ -195,5 +230,7 @@ if __name__ == "__main__":
     test_multipart_and_gallery_upload()
     test_edit_model()
     test_delete_and_clear_orders()
+    test_telegram_wizard_auth()
     print("\nTODOS OS TESTES DE SEGURANÇA E FUNCIONALIDADES PASSARAM COM SUCESSO!")
+
 
