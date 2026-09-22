@@ -45,13 +45,17 @@ services:
       # Ingestão Automática via Telegram Bot
       - TELEGRAM_BOT_TOKEN=8856055764:AAF5PxZzZ6y9GHgCGr-t6apEtQkPKFDfGsM
       - TELEGRAM_ADMIN_CHAT_ID=5370959021438146805
+      
+      # Performance e Logs em Tempo Real
+      - PYTHONUNBUFFERED=1
+      - DEBIAN_FRONTEND=noninteractive
 
     deploy:
       mode: replicated
       replicas: 1
       placement:
         constraints:
-          - node.role == worker
+          - node.hostname == worker02
       resources:
         limits:
           cpus: "1"
