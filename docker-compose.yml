@@ -4,13 +4,27 @@ services:
   catalogo3d:
     image: python:3.11-slim
     hostname: "{{.Service.Name}}.{{.Task.Slot}}"
+    command:
+      - /bin/bash
+      - -c
+      - |
+        apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+        if [ ! -d "/app/.git" ]; then
+          git clone https://github.com/anascimento18/catalogo3d.git /app
+        else
+          cd /app && git pull
+        fi
+        cd /app
+        pip install --no-cache-dir -r requirements.txt
+        exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
     networks:
       - network_swarm_public
     volumes:
-      - catalogo3d_data:/app/data
+      - catalogo3d_data:/data
     environment:
+      - DATA_DIR=/data
       # Conexão com o PostgreSQL interno do Swarm
-      - DATABASE_URL=postgresql://postgres:Anascimento2025Antonio@postgreslink:5432/catalogo3d
+      - DATABASE_URL=postgresql://postgres:Anascimento2025Antonio@postgreslink:5432/postgres
       
       # Segurança e Acesso Administrativo
       - ADMIN_USERNAME=andre
@@ -35,9 +49,6 @@ services:
     deploy:
       mode: replicated
       replicas: 1
-      placement:
-        constraints:
-          - node.role == manager
       resources:
         limits:
           cpus: "1"
@@ -54,8 +65,6 @@ services:
 
 volumes:
   catalogo3d_data:
-    external: true
-    name: catalogo3d_data
 
 networks:
   network_swarm_public:
