@@ -69,7 +69,7 @@ async def setup_telegram_webhook(bot_token: str, base_domain: str):
 
 
 async def send_telegram_reply(bot_token: str, chat_id: int, text: str, reply_markup: Optional[dict] = None):
-    """Envia mensagem de texto formatada com suporte a botões inline."""
+    """Envia mensagem de texto formatada com suporte a botões inline e fallback automático para texto plano."""
     if not bot_token or not chat_id:
         return
     payload = {
@@ -83,10 +83,24 @@ async def send_telegram_reply(bot_token: str, chat_id: int, text: str, reply_mar
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
+            res = await client.post(
                 f"https://api.telegram.org/bot{bot_token}/sendMessage",
                 json=payload
             )
+            # Se o Telegram rejeitar devido a caracteres especiais de Markdown (ex: underscore em comandos ou nomes de arquivos)
+            if res.status_code != 200 or not res.json().get("ok"):
+                logger.warning(f"Aviso ao enviar markdown ({res.text}). Reenviando em texto plano...")
+                plain_payload = {
+                    "chat_id": chat_id,
+                    "text": text.replace("*", "").replace("_", "").replace("`", ""),
+                    "disable_web_page_preview": False
+                }
+                if reply_markup:
+                    plain_payload["reply_markup"] = reply_markup
+                await client.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json=plain_payload
+                )
     except Exception as e:
         logger.error(f"Erro ao responder no Telegram (chat {chat_id}): {e}")
 
@@ -490,7 +504,7 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             f"📸 *Passo 3 de 6: Fotos Adicionais da Galeria (Opcional)*\n"
             f"Deseja adicionar mais fotos deste modelo para o carrossel na vitrine?\n\n"
             f"• Se tiver mais fotos, **envie outra foto agora**.\n"
-            f"• Se NÃO tiver mais fotos, clique no botão abaixo ou digite /concluir_fotos:",
+            f"• Se NÃO tiver mais fotos, clique no botão abaixo ou digite /concluir:",
             reply_markup=keyboard
         )
         return {"ok": True}
@@ -499,8 +513,8 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
     # PASSO 3: Aguardando Fotos Adicionais ou Conclusão da Galeria
     # =========================================================================
     if step == "WAIT_GALLERY":
-        # Se clicou no botão "Concluir Fotos" ou digitou /concluir_fotos ou "não"
-        if callback_data == "gallery_done" or text in ("/concluir_fotos", "não", "nao", "concluir", "pular"):
+        # Se clicou no botão "Concluir Fotos" ou digitou /concluir ou "não"
+        if callback_data == "gallery_done" or text.lower() in ("/concluir", "/concluir_fotos", "não", "nao", "concluir", "pular", "pronto", "ok"):
             wizard["step"] = "WAIT_TITLE"
             total_g = len(wizard["gallery_imgs"])
             await send_telegram_reply(
