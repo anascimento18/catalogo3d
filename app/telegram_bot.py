@@ -105,21 +105,40 @@ async def answer_callback_query(bot_token: str, callback_query_id: str, text: Op
         logger.error(f"Erro ao responder callback query no Telegram: {e}")
 
 
-async def download_telegram_file(bot_token: str, file_id: str, dest_path: Path) -> bool:
-    """Baixa um arquivo dos servidores do Telegram para o disco local."""
+async def download_telegram_file(bot_token: str, file_id: str, dest_path: Path) -> tuple[bool, str]:
+    """
+    Baixa um arquivo dos servidores do Telegram para o disco local com streaming em chunks.
+    Retorna (sucesso, mensagem_ou_erro).
+    """
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        timeout_config = httpx.Timeout(connect=20.0, read=180.0, write=60.0, pool=30.0)
+        async with httpx.AsyncClient(timeout=timeout_config) as client:
             res = await client.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}")
-            file_path_on_tg = res.json().get("result", {}).get("file_path")
+            res_data = res.json()
+            if not res_data.get("ok"):
+                err_desc = res_data.get("description", "Erro ao obter informações do arquivo no Telegram")
+                logger.error(f"Telegram getFile error para file_id {file_id}: {err_desc}")
+                return False, err_desc
+
+            file_path_on_tg = res_data.get("result", {}).get("file_path")
             if not file_path_on_tg:
-                return False
+                return False, "Caminho do arquivo não fornecido pelo Telegram"
+
             download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path_on_tg}"
-            file_res = await client.get(download_url)
-            dest_path.write_bytes(file_res.content)
-            return True
+            async with client.stream("GET", download_url) as file_res:
+                if file_res.status_code != 200:
+                    return False, f"Servidor do Telegram retornou HTTP {file_res.status_code}"
+                with open(dest_path, "wb") as f:
+                    async for chunk in file_res.aiter_bytes(chunk_size=65536):
+                        f.write(chunk)
+            return True, "Sucesso"
+    except httpx.ReadTimeout:
+        logger.error(f"Timeout ao baixar arquivo {file_id} do Telegram (>180s)")
+        return False, "Tempo limite esgotado ao baixar o arquivo dos servidores do Telegram (>180s)"
     except Exception as e:
         logger.error(f"Erro ao baixar arquivo {file_id} do Telegram: {e}")
-        return False
+        return False, str(e)
 
 
 async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: Optional[str] = None) -> dict:
@@ -260,8 +279,10 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             bot_token, chat_id,
             "🚀 *Cadastro de Novo Modelo 3D (Passo 1 de 6)*\n\n"
             "📁 *Envie o(s) Arquivo(s) 3D:*\n"
-            "Envie agora o arquivo `.STL`, `.3MF`, `.STEP`, `.OBJ` ou `.ZIP`.\n\n"
-            "💡 _Dica: Se o modelo tiver várias peças, você pode enviar um arquivo `.ZIP` contendo todas elas ou enviar múltiplos arquivos .STL!_"
+            "Envie o arquivo `.STL`, `.3MF`, `.STEP`, `.OBJ` ou `.ZIP`.\n\n"
+            "💡 *Dicas importantes:*\n"
+            "• **Limite do Telegram:** A API do Telegram permite download de arquivos de até **20 MB**. Se o seu arquivo for maior que 20MB, você pode cadastrar pelo painel web: `catalogo3d.3afieldservice.com.br/admin` (onde aceita até 500 MB).\n"
+            "• **Múltiplas Peças:** Se seu modelo tem várias peças, pode enviar os arquivos `.STL` individuais um a um aqui no chat!"
         )
         return {"ok": True}
 
@@ -277,66 +298,146 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
     step = wizard.get("step")
 
     # =========================================================================
-    # PASSO 1: Aguardando Arquivo 3D
+    # PASSO 1: Aguardando Arquivo(s) 3D
     # =========================================================================
     if step == "WAIT_3D":
-        if not document:
+        # Se clicou no botão "Concluir Arquivos 3D" ou digitou comando de conclusão
+        if callback_data == "files_3d_done" or text.lower() in ("/concluir", "/concluir_arquivos", "concluir", "pronto", "ok", "avancar", "avançar"):
+            if not wizard["files_3d"]:
+                await send_telegram_reply(
+                    bot_token, chat_id,
+                    "⚠️ Nenhum arquivo 3D foi enviado ainda. Envie o arquivo `.STL`, `.3MF`, `.STEP`, `.OBJ` ou `.ZIP` primeiro."
+                )
+                return {"ok": True}
+
+            wizard["step"] = "WAIT_COVER"
+            total_parts = sum(f.get("parts_count", 1) for f in wizard["files_3d"])
             await send_telegram_reply(
                 bot_token, chat_id,
-                "⚠️ *Por favor, envie o arquivo 3D como Documento/Arquivo no Telegram* (`.STL`, `.3MF`, `.OBJ`, `.ZIP`)."
+                f"✅ *Arquivos 3D concluídos com sucesso!* ({len(wizard['files_3d'])} arquivo(s), {total_parts} peça(s)).\n\n"
+                f"---\n"
+                f"🖼️ *Passo 2 de 6: Foto de Capa Principal*\n"
+                f"Envie agora a **Foto de Capa Principal** da peça (esta foto será a vitrine principal no catálogo)."
             )
             return {"ok": True}
 
-        file_name = document.get("file_name", "modelo.stl")
-        ext = Path(file_name).suffix.lower()
+        # Se já enviou arquivo 3D e mandou uma foto, transiciona automaticamente para o Passo 2 (Capa)
+        is_photo = bool(photos) or (bool(document) and Path(document.get("file_name", "")).suffix.lower() in ALLOWED_IMG_EXTENSIONS)
+        if is_photo and wizard["files_3d"]:
+            wizard["step"] = "WAIT_COVER"
+            step = "WAIT_COVER"
+        else:
+            if not document:
+                await send_telegram_reply(
+                    bot_token, chat_id,
+                    "⚠️ *Por favor, envie o arquivo 3D como Documento/Arquivo no Telegram* (`.STL`, `.3MF`, `.OBJ`, `.ZIP`).\n\n"
+                    f"_💡 Se o arquivo for maior que 20 MB, envie diretamente pelo painel web: {CATALOG_DOMAIN}/admin_"
+                )
+                return {"ok": True}
 
-        if ext not in ALLOWED_3D_EXTENSIONS:
-            await send_telegram_reply(
-                bot_token, chat_id,
-                f"⚠️ A extensão `{ext}` não é permitida. Envie arquivos `.STL`, `.3MF`, `.STEP`, `.OBJ` ou `.ZIP`."
-            )
-            return {"ok": True}
+            file_size_bytes = document.get("file_size", 0)
+            if file_size_bytes and file_size_bytes > 20 * 1024 * 1024:
+                size_mb = file_size_bytes / (1024 * 1024)
+                await send_telegram_reply(
+                    bot_token, chat_id,
+                    f"⚠️ *Arquivo muito grande para o Telegram ({size_mb:.1f} MB)*\n\n"
+                    f"A API oficial de Bots do Telegram impõe um limite de **20 MB** para download de arquivos pelo chat.\n\n"
+                    f"💡 *Como publicar este modelo:*\n"
+                    f"1️⃣ **Pelo Painel Web (Recomendado):**\n"
+                    f"Acesse diretamente pelo navegador:\n"
+                    f"🌐 `{CATALOG_DOMAIN}/admin`\n"
+                    f"_(O painel web aceita arquivos .ZIP ou .STL de até 500 MB sem limite do Telegram!)_\n\n"
+                    f"2️⃣ **Ou envie as peças .STL separadamente aqui:**\n"
+                    f"Se o seu arquivo for um `.ZIP` com várias peças, envie os arquivos `.STL` individuais um a um aqui no chat (cada um abaixo de 20 MB). O assistente junta todos automaticamente em um único pacote!"
+                )
+                return {"ok": True}
 
-        await send_telegram_reply(bot_token, chat_id, f"⏳ Baixando `{file_name}`...")
+            raw_file_name = document.get("file_name") or "modelo.stl"
+            file_name = Path(raw_file_name).name
+            file_name = re.sub(r'[^\w\-_\. ()]', '_', file_name)
+            ext = Path(file_name).suffix.lower()
 
-        target_file = wizard["temp_dir"] / file_name
-        success = await download_telegram_file(bot_token, document.get("file_id"), target_file)
-        if not success:
-            await send_telegram_reply(bot_token, chat_id, "❌ Falha ao baixar arquivo do Telegram. Tente enviar novamente.")
-            return {"ok": False}
+            if ext not in ALLOWED_3D_EXTENSIONS:
+                await send_telegram_reply(
+                    bot_token, chat_id,
+                    f"⚠️ A extensão `{ext}` não é permitida. Envie arquivos `.STL`, `.3MF`, `.STEP`, `.OBJ` ou `.ZIP`."
+                )
+                return {"ok": True}
 
-        file_size = target_file.stat().st_size
-        parts_count = 1
+            await send_telegram_reply(bot_token, chat_id, f"⏳ Baixando `{file_name}`...")
 
-        # Inspeciona se for .ZIP
-        if ext == ".zip":
-            try:
-                with zipfile.ZipFile(target_file, "r") as zf:
-                    pieces = [n for n in zf.namelist() if any(n.lower().endswith(e) for e in ALLOWED_3D_EXTENSIONS)]
-                    if pieces:
-                        parts_count = len(pieces)
-            except Exception:
-                pass
+            target_file = wizard["temp_dir"] / file_name
+            success, err_msg = await download_telegram_file(bot_token, document.get("file_id"), target_file)
+            if not success:
+                if "file is too big" in err_msg.lower():
+                    await send_telegram_reply(
+                        bot_token, chat_id,
+                        f"⚠️ *Arquivo maior que 20 MB (Limite da API do Telegram)*\n\n"
+                        f"O Telegram não permite que robôs baixem arquivos com mais de 20 MB.\n\n"
+                        f"💡 *Soluções:*\n"
+                        f"1️⃣ Acesse o painel web `{CATALOG_DOMAIN}/admin` para subir arquivos de até 500 MB;\n"
+                        f"2️⃣ Ou envie os arquivos `.STL` das peças individualmente aqui no chat."
+                    )
+                else:
+                    await send_telegram_reply(
+                        bot_token, chat_id,
+                        f"❌ *Falha no download:* {err_msg}.\n\n"
+                        f"Tente enviar novamente ou faça o upload diretamente pelo painel web:\n"
+                        f"🌐 `{CATALOG_DOMAIN}/admin`"
+                    )
+                return {"ok": False}
 
-        wizard["files_3d"].append({
-            "name": file_name,
-            "path": target_file,
-            "size": file_size,
-            "ext": ext,
-            "parts_count": parts_count
-        })
+            file_size = target_file.stat().st_size
+            parts_count = 1
 
-        wizard["step"] = "WAIT_COVER"
+            # Inspeciona se for .ZIP
+            if ext == ".zip":
+                try:
+                    with zipfile.ZipFile(target_file, "r") as zf:
+                        pieces = [n for n in zf.namelist() if any(n.lower().endswith(e) for e in ALLOWED_3D_EXTENSIONS)]
+                        if pieces:
+                            parts_count = len(pieces)
+                except Exception:
+                    pass
 
-        await send_telegram_reply(
-            bot_token, chat_id,
-            f"✅ *Arquivo 3D recebido!*\n"
-            f"📁 `{file_name}` ({file_size/1024/1024:.2f} MB) — *{parts_count} peça(s) detectada(s)*.\n\n"
-            f"---\n"
-            f"🖼️ *Passo 2 de 6: Foto de Capa Principal*\n"
-            f"Envie agora a **Foto de Capa Principal** da peça (esta foto será a vitrine principal no catálogo)."
-        )
-        return {"ok": True}
+            wizard["files_3d"].append({
+                "name": file_name,
+                "path": target_file,
+                "size": file_size,
+                "ext": ext,
+                "parts_count": parts_count
+            })
+
+            # Se for .ZIP, já é um pacote consolidado: avança para a foto de capa
+            if ext == ".zip":
+                wizard["step"] = "WAIT_COVER"
+                await send_telegram_reply(
+                    bot_token, chat_id,
+                    f"✅ *Pacote ZIP recebido!*\n"
+                    f"📁 `{file_name}` ({file_size/1024/1024:.2f} MB) — *{parts_count} peça(s) detectada(s)*.\n\n"
+                    f"---\n"
+                    f"🖼️ *Passo 2 de 6: Foto de Capa Principal*\n"
+                    f"Envie agora a **Foto de Capa Principal** da peça (esta foto será a vitrine principal no catálogo)."
+                )
+                return {"ok": True}
+            else:
+                # Se for arquivo avulso (.STL, .3MF, etc.), permite enviar mais peças ou concluir
+                count = len(wizard["files_3d"])
+                keyboard = {
+                    "inline_keyboard": [
+                        [{"text": f"➡️ Concluir Arquivos 3D ({count} peça{'s' if count > 1 else ''})", "callback_data": "files_3d_done"}]
+                    ]
+                }
+                await send_telegram_reply(
+                    bot_token, chat_id,
+                    f"✅ *Peça 3D #{count} recebida com sucesso!*\n"
+                    f"📁 `{file_name}` ({file_size/1024/1024:.2f} MB)\n\n"
+                    f"💡 *O modelo possui mais peças?*\n"
+                    f"• Se tiver mais peças `.STL`, envie o próximo arquivo agora;\n"
+                    f"• Se já enviou todas as peças deste modelo, clique no botão abaixo ou envie a foto de capa:",
+                    reply_markup=keyboard
+                )
+                return {"ok": True}
 
     # =========================================================================
     # PASSO 2: Aguardando Foto de Capa Principal
@@ -364,9 +465,9 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
         await send_telegram_reply(bot_token, chat_id, "⏳ Baixando foto de capa...")
 
         target_cover = wizard["temp_dir"] / orig_name
-        success = await download_telegram_file(bot_token, file_id, target_cover)
+        success, err_msg = await download_telegram_file(bot_token, file_id, target_cover)
         if not success:
-            await send_telegram_reply(bot_token, chat_id, "❌ Falha ao baixar imagem. Tente enviar novamente.")
+            await send_telegram_reply(bot_token, chat_id, f"❌ Falha ao baixar imagem de capa: {err_msg}. Tente enviar novamente.")
             return {"ok": False}
 
         wizard["cover_img"] = {
@@ -426,7 +527,7 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
 
         if file_id:
             target_gal = wizard["temp_dir"] / orig_name
-            success = await download_telegram_file(bot_token, file_id, target_gal)
+            success, err_msg = await download_telegram_file(bot_token, file_id, target_gal)
             if success:
                 wizard["gallery_imgs"].append({
                     "name": orig_name,
@@ -443,6 +544,13 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
                     f"📸 *Foto extra #{count} adicionada à galeria!*\n\n"
                     f"Envie outra foto se desejar, ou clique no botão abaixo para prosseguir:",
                     reply_markup=keyboard
+                )
+                return {"ok": True}
+            else:
+                await send_telegram_reply(
+                    bot_token, chat_id,
+                    f"⚠️ Falha ao baixar foto adicional: {err_msg}. Tente enviar novamente ou conclua no botão abaixo:",
+                    reply_markup={"inline_keyboard": [[{"text": "➡️ Concluir Fotos", "callback_data": "gallery_done"}]]}
                 )
                 return {"ok": True}
 
@@ -637,7 +745,12 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
 
         price_display = f"R$ {wizard['price']:.2f}" if wizard["show_price"] and wizard["price"] > 0 else "Sob Consulta"
         feat_display = "Sim (★ Mais Pedido)" if wizard["is_featured"] else "Não"
-        file_info = wizard["files_3d"][0]
+        total_3d_files = len(wizard["files_3d"])
+        if total_3d_files == 1:
+            file_info = wizard["files_3d"][0]
+            parts_summary = f"`{file_info['name']}` ({file_info['parts_count']} peça(s))"
+        else:
+            parts_summary = f"{total_3d_files} peças (.STL agrupadas em .ZIP)"
         total_photos = 1 + len(wizard["gallery_imgs"])
 
         summary_msg = (
@@ -647,7 +760,7 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             f"💰 *Preço:* {price_display}\n"
             f"⭐ *Destaque:* {feat_display}\n"
             f"🔥 *Prova Social:* {wizard['order_count']} pedidos realizados\n"
-            f"📁 *Arquivo 3D:* `{file_info['name']}` ({file_info['parts_count']} peças)\n"
+            f"📁 *Arquivo 3D:* {parts_summary}\n"
             f"🖼️ *Galeria:* {total_photos} foto(s) cadastradas\n"
             f"📝 *Descrição:* _{wizard['description']}_\n\n"
             f"Tudo pronto! Deseja publicar o modelo no catálogo agora?"
@@ -694,15 +807,26 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
                 shutil.move(str(g_info["path"]), str(IMAGE_DIR / g_name))
                 saved_gallery_names.append(g_name)
 
-            # 3. Move Arquivo 3D
-            f_3d = wizard["files_3d"][0]
-            f_ext = f_3d["ext"]
-            saved_3d_name = f"{clean_title}_{unique_id}{f_ext}"
-            target_3d = MODEL_DIR / saved_3d_name
-            shutil.move(str(f_3d["path"]), str(target_3d))
-
-            parts_count = f_3d["parts_count"]
-            format_str = f_ext.lstrip(".").upper()
+            # 3. Processa e Move Arquivo(s) 3D
+            if len(wizard["files_3d"]) == 1:
+                f_3d = wizard["files_3d"][0]
+                f_ext = f_3d["ext"]
+                saved_3d_name = f"{clean_title}_{unique_id}{f_ext}"
+                target_3d = MODEL_DIR / saved_3d_name
+                shutil.move(str(f_3d["path"]), str(target_3d))
+                parts_count = f_3d["parts_count"]
+                format_str = f_ext.lstrip(".").upper()
+                total_size = f_3d["size"]
+            else:
+                # Múltiplas peças (.STL) recebidas individualmente: empacota em .ZIP com compressão rápida
+                saved_3d_name = f"{clean_title}_{unique_id}.zip"
+                target_3d = MODEL_DIR / saved_3d_name
+                with zipfile.ZipFile(target_3d, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
+                    for item in wizard["files_3d"]:
+                        zf.write(item["path"], arcname=item["name"])
+                parts_count = len(wizard["files_3d"])
+                format_str = "ZIP"
+                total_size = target_3d.stat().st_size
 
             # 4. Grava no Banco de Dados
             db = SessionLocal()
@@ -715,10 +839,10 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
                     image_filename=saved_cover_name,
                     gallery_images=json.dumps(saved_gallery_names),
                     file_3d_filename=saved_3d_name,
-                    files_3d_list=json.dumps([{"name": f_3d["name"], "size": f_3d["size"]}]),
+                    files_3d_list=json.dumps([{"name": f["name"], "size": f["size"]} for f in wizard["files_3d"]]),
                     parts_count=parts_count,
                     file_format=format_str,
-                    file_size_bytes=f_3d["size"],
+                    file_size_bytes=total_size,
                     price=wizard["price"],
                     show_price=wizard["show_price"],
                     order_count=wizard["order_count"],
