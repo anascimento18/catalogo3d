@@ -77,18 +77,19 @@ def init_db():
         if db.query(Category).count() == 0:
             default_categories = [
                 Category(name="Decoração & Casa", slug="decoracao", icon="home", sort_order=1),
-                Category(name="Peças Técnicas & Reposição", slug="tecnicas", icon="settings", sort_order=2),
-                Category(name="Geek & Colecionáveis", slug="geek", icon="gamepad-2", sort_order=3),
-                Category(name="Cosplay & Adereços", slug="cosplay", icon="shield", sort_order=4),
-                Category(name="Brinquedos & Articulados", slug="brinquedos", icon="smile", sort_order=5),
-                Category(name="Litofanias & Personalizados", slug="litofanias", icon="sparkles", sort_order=6),
-                Category(name="Suportes & Utilidades", slug="utilidades", icon="wrench", sort_order=7),
+                Category(name="Religioso", slug="religioso", icon="cross", sort_order=2),
+                Category(name="Peças Técnicas & Reposição", slug="tecnicas", icon="settings", sort_order=3),
+                Category(name="Geek & Colecionáveis", slug="geek", icon="gamepad-2", sort_order=4),
+                Category(name="Cosplay & Adereços", slug="cosplay", icon="shield", sort_order=5),
+                Category(name="Brinquedos & Articulados", slug="brinquedos", icon="smile", sort_order=6),
+                Category(name="Litofanias & Personalizados", slug="litofanias", icon="sparkles", sort_order=7),
+                Category(name="Suportes & Utilidades", slug="utilidades", icon="wrench", sort_order=8),
             ]
             db.add_all(default_categories)
             db.commit()
 
         # Seed do usuário administrador inicial
-        from app.security import hash_password
+        from app.security import hash_password, verify_password
         admin = db.query(AdminUser).filter_by(username=ADMIN_USERNAME).first()
         if not admin:
             new_admin = AdminUser(
@@ -97,5 +98,9 @@ def init_db():
             )
             db.add(new_admin)
             db.commit()
+        else:
+            if "$" not in admin.password_hash or not verify_password(ADMIN_PASSWORD, admin.password_hash):
+                admin.password_hash = hash_password(ADMIN_PASSWORD)
+                db.commit()
     finally:
         db.close()

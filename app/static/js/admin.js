@@ -1,4 +1,4 @@
-// Script Administrativo - 3A Field Service
+// Script do Painel Administrativo 3D
 let adminCategories = [];
 let selectedFile3D = null;
 let selectedFileImg = null;

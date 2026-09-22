@@ -1,4 +1,4 @@
-// Script da Vitrine Pública - 3A Field Service Impressão 3D
+// Script da Vitrine Pública - Catálogo & Impressão 3D
 // Segurança: Este script não possui chaves de API, senhas ou URLs de arquivos 3D brutos.
 
 let allCategories = [];
