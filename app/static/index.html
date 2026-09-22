@@ -145,16 +145,19 @@
           
           <div class="modal-details-strip">
             <div>
-              <h4 id="modalModelName" style="font-size: 16px; font-weight: 700; margin-bottom: 4px;">Nome do Modelo</h4>
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <span id="modalModelCategory" style="font-size: 12px; color: #a1a1aa;">Categoria</span>
-                <span id="modalPartsBadge" class="parts-badge" style="display: none;"></span>
-              </div>
+              <h4 id="modalModelName" style="font-size: 17px; font-weight: 700; margin-bottom: 2px;">Nome do Modelo</h4>
+              <span id="modalModelCategory" style="font-size: 12px; color: #a1a1aa;">Categoria</span>
             </div>
             <div style="text-align: right;">
               <span style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; display: block;">Valor</span>
               <span id="modalModelPrice" style="font-weight: 800; color: #22c55e; font-size: 18px; font-family: var(--font-display);"></span>
             </div>
+          </div>
+
+          <!-- Descrição Completa do Modelo -->
+          <div id="modalDescContainer" style="margin-top: 12px; padding: 10px 14px; background: rgba(255,255,255,0.04); border-radius: 8px; border: 1px solid rgba(255,255,255,0.07);">
+            <span style="font-size: 11px; text-transform: uppercase; color: #a1a1aa; font-weight: 600; display: block; margin-bottom: 4px; letter-spacing: 0.5px;">Descrição da Peça</span>
+            <p id="modalModelDesc" style="font-size: 13.5px; line-height: 1.5; color: #e4e4e7; margin: 0; white-space: pre-line;"></p>
           </div>
         </div>
 
@@ -211,7 +214,7 @@
   </footer>
 
   <!-- Scripts -->
-  <script src="/static/js/app.js?v=3.0"></script>
+  <script src="/static/js/app.js?v=3.2"></script>
   <script>
     lucide.createIcons();
   </script>

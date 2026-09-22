@@ -98,21 +98,13 @@ function renderModels(models) {
       : '';
 
     const galleryCountBadge = m.gallery && m.gallery.length > 1
-      ? `<span class="badge-tag" style="background: rgba(0,0,0,0.6);"><i data-lucide="camera" style="width:11px;height:11px;margin-right:3px;"></i>${m.gallery.length} fotos</span>`
-      : '';
-
-    const partsBadge = m.parts_count && m.parts_count > 1
-      ? `<span class="badge-tag" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">${m.parts_count} peças</span>`
+      ? `<span class="badge-tag" style="background: rgba(0,0,0,0.75);"><i data-lucide="camera" style="width:11px;height:11px;margin-right:3px;"></i>${m.gallery.length} fotos</span>`
       : '';
 
     return `
       <article class="model-card animate-fade-in" data-id="${m.id}">
-        <div class="card-media">
+        <div class="card-media" onclick="openOrderModal(${m.id})" style="cursor: pointer;" title="Clique para ver fotos e detalhes">
           <img src="${m.image_url}" alt="${escapeHtml(m.title)}" class="card-img" loading="lazy">
-          <div class="badge-top-left" style="display: flex; gap: 4px; flex-wrap: wrap;">
-            <span class="badge-tag">${m.file_format || '3D'}</span>
-            ${partsBadge}
-          </div>
           <div class="badge-top-right" style="display: flex; gap: 4px; flex-direction: column; align-items: flex-end;">
             ${featuredBadge}
             ${galleryCountBadge}
@@ -121,8 +113,8 @@ function renderModels(models) {
 
         <div class="card-body">
           <span class="card-category">${escapeHtml(m.category_name || 'Geral')}</span>
-          <h3 class="card-title">${escapeHtml(m.title)}</h3>
-          <p class="card-desc">${escapeHtml(m.description || 'Modelo de alta precisão pronto para impressão.')}</p>
+          <h3 class="card-title" onclick="openOrderModal(${m.id})" style="cursor: pointer;" title="Clique para ver fotos e detalhes">${escapeHtml(m.title)}</h3>
+          <p class="card-desc">${escapeHtml(m.description || 'Modelo sob demanda de alta precisão.')}</p>
 
           <div class="card-meta">
             ${priceHtml}
@@ -133,8 +125,8 @@ function renderModels(models) {
           </div>
 
           <button class="btn-order" type="button" onclick="openOrderModal(${m.id})">
-            <i data-lucide="message-square" style="width:16px;height:16px;"></i>
-            <span>Solicitar Impressão</span>
+            <i data-lucide="eye" style="width:16px;height:16px;"></i>
+            <span>Ver Detalhes & Pedir</span>
           </button>
         </div>
       </article>
@@ -205,15 +197,10 @@ function openOrderModal(modelId) {
     thumbsContainer.innerHTML = '';
   }
 
-  // Badge de Peças / Componentes
-  const partsBadge = document.getElementById('modalPartsBadge');
-  if (partsBadge) {
-    if (model.parts_count && model.parts_count > 1) {
-      partsBadge.style.display = 'inline-flex';
-      partsBadge.textContent = `📦 ${model.parts_count} peças no projeto`;
-    } else {
-      partsBadge.style.display = 'none';
-    }
+  // Descrição Completa no Modal
+  const descEl = document.getElementById('modalModelDesc');
+  if (descEl) {
+    descEl.textContent = model.description || 'Modelo de alta precisão pronto para impressão sob demanda.';
   }
 
   // Reseta visualização do modal

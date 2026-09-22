@@ -1,5 +1,6 @@
 // Script do Painel Administrativo 3D
 let adminCategories = [];
+let allAdminModels = [];
 let selectedFiles3D = [];
 let selectedFileImg = null;
 let selectedGalleryImgs = [];
@@ -10,6 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAdminCategories();
   loadAdminModels();
   setupUploadForm();
+  setupEditForm();
   setupLogout();
 });
 
@@ -68,6 +70,7 @@ async function loadAdminModels() {
       return;
     }
     const models = await res.json();
+    allAdminModels = models;
 
     if (models.length === 0) {
       tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 32px; color: #71717a;">Nenhum modelo cadastrado ainda. Use a aba "Novo Upload" para adicionar seu primeiro arquivo.</td></tr>`;
@@ -103,6 +106,10 @@ async function loadAdminModels() {
           <td>${showPriceBadge}</td>
           <td>🔥 ${m.order_count || 0}</td>
           <td style="text-align: right; white-space: nowrap;">
+            <button class="btn-action edit" onclick="openEditModal(${m.id})" title="Editar título, descrição e dados" style="border-color: rgba(56, 189, 248, 0.4); color: #38bdf8;">
+              <i data-lucide="edit-3" style="width:14px;height:14px;"></i>
+              <span>Editar</span>
+            </button>
             <a href="/api/admin/models/${m.id}/download" class="btn-action download" title="Baixar arquivo 3D original">
               <i data-lucide="download" style="width:14px;height:14px;"></i>
               <span>Download 3D</span>
@@ -123,7 +130,7 @@ async function loadAdminModels() {
   }
 }
 
-// 4. Download e Exclusão de Modelos
+// 4. Download, Edição e Exclusão de Modelos
 async function deleteModel(id, title) {
   if (!confirm(`Tem certeza que deseja excluir o modelo "${title}" e seus arquivos do servidor?`)) {
     return;
@@ -138,6 +145,109 @@ async function deleteModel(id, title) {
   } catch (err) {
     alert(err.message || 'Erro ao excluir');
   }
+}
+
+// Abre Modal de Edição com dados preenchidos
+window.openEditModal = function(id) {
+  const model = allAdminModels.find(m => m.id === id);
+  if (!model) return;
+
+  document.getElementById('editModelId').value = model.id;
+  document.getElementById('editModelTitle').value = model.title || '';
+  document.getElementById('editModelPrice').value = model.price !== undefined ? model.price : '0.00';
+  document.getElementById('editModelShowPrice').checked = !!model.show_price;
+  document.getElementById('editModelFeatured').checked = !!model.is_featured;
+  document.getElementById('editModelOrderCount').value = model.order_count || 0;
+  document.getElementById('editModelDesc').value = model.description || '';
+
+  // Popula categorias no select de edição
+  const catSelect = document.getElementById('editModelCategory');
+  if (catSelect && adminCategories.length) {
+    catSelect.innerHTML = adminCategories.map(c => `
+      <option value="${c.id}" ${c.id === model.category_id ? 'selected' : ''}>${c.name}</option>
+    `).join('');
+  }
+
+  const alertBox = document.getElementById('editAlert');
+  if (alertBox) alertBox.style.display = 'none';
+
+  const modal = document.getElementById('editModal');
+  if (modal) {
+    modal.style.display = 'flex';
+    modal.classList.add('active');
+  }
+  if (window.lucide) lucide.createIcons();
+};
+
+window.closeEditModal = function() {
+  const modal = document.getElementById('editModal');
+  if (modal) {
+    modal.style.display = 'none';
+    modal.classList.remove('active');
+  }
+};
+
+function setupEditForm() {
+  const form = document.getElementById('editForm');
+  const alertBox = document.getElementById('editAlert');
+  const btn = document.getElementById('btnSaveEdit');
+  if (!form) return;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('editModelId').value;
+    const title = document.getElementById('editModelTitle').value.trim();
+    const categoryId = parseInt(document.getElementById('editModelCategory').value);
+    const price = parseFloat(document.getElementById('editModelPrice').value || '0');
+    const showPrice = document.getElementById('editModelShowPrice').checked;
+    const isFeatured = document.getElementById('editModelFeatured').checked;
+    const orderCount = parseInt(document.getElementById('editModelOrderCount').value || '0');
+    const desc = document.getElementById('editModelDesc').value.trim();
+
+    btn.disabled = true;
+    btn.innerHTML = `<span>Salvando alterações...</span>`;
+
+    try {
+      const res = await fetch(`/api/admin/models/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          category_id: categoryId,
+          price,
+          show_price: showPrice,
+          is_featured: isFeatured,
+          order_count: orderCount,
+          description: desc
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao salvar');
+
+      alertBox.textContent = 'Modelo atualizado com sucesso!';
+      alertBox.style.background = 'rgba(34, 197, 94, 0.15)';
+      alertBox.style.border = '1px solid rgba(34, 197, 94, 0.3)';
+      alertBox.style.color = '#86efac';
+      alertBox.style.display = 'block';
+
+      setTimeout(() => {
+        closeEditModal();
+        loadAdminModels();
+      }, 700);
+
+    } catch (err) {
+      alertBox.textContent = `Erro: ${err.message}`;
+      alertBox.style.background = 'rgba(239, 35, 60, 0.15)';
+      alertBox.style.border = '1px solid rgba(239, 35, 60, 0.3)';
+      alertBox.style.color = '#fca5a5';
+      alertBox.style.display = 'block';
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `<i data-lucide="check" style="width: 16px; height: 16px;"></i><span>Salvar Alterações</span>`;
+      if (window.lucide) lucide.createIcons();
+    }
+  });
 }
 
 // 5. Configuração dos Dropzones com Suporte a Múltiplos Arquivos e Galeria

@@ -433,7 +433,7 @@ async def upload_model(
 
         saved_3d_name = f"{clean_title}_{unique_id}_bundle.zip"
         target_zip = MODEL_DIR / saved_3d_name
-        with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
             for p_path, p_orig_name in saved_part_files:
                 zf.write(p_path, arcname=p_orig_name)
 
@@ -503,22 +503,44 @@ async def update_model(
     db: Session = Depends(get_db),
     admin: str = Depends(get_current_admin)
 ):
-    """Atualiza configurações de preço, prova social ou destaque do modelo."""
+    """Atualiza configurações de título, descrição, categoria, preço, prova social ou destaque do modelo."""
     model = db.query(Model3D).filter(Model3D.id == model_id).first()
     if not model:
         raise HTTPException(status_code=404, detail="Modelo não encontrado.")
 
     data = await request.json()
-    if "title" in data: model.title = str(data["title"])
-    if "description" in data: model.description = str(data["description"])
-    if "price" in data: model.price = float(data["price"])
-    if "show_price" in data: model.show_price = bool(data["show_price"])
-    if "order_count" in data: model.order_count = int(data["order_count"])
-    if "is_featured" in data: model.is_featured = bool(data["is_featured"])
-    if "is_public" in data: model.is_public = bool(data["is_public"])
+    if "title" in data and data["title"] is not None:
+        model.title = str(data["title"]).strip()
+    if "description" in data and data["description"] is not None:
+        model.description = str(data["description"]).strip()
+    if "category_id" in data and data["category_id"] is not None:
+        cat = db.query(Category).filter(Category.id == int(data["category_id"])).first()
+        if cat:
+            model.category_id = cat.id
+            model.category_name = cat.name
+    if "price" in data and data["price"] is not None:
+        model.price = float(data["price"])
+    if "show_price" in data and data["show_price"] is not None:
+        model.show_price = bool(data["show_price"])
+    if "order_count" in data and data["order_count"] is not None:
+        model.order_count = int(data["order_count"])
+    if "is_featured" in data and data["is_featured"] is not None:
+        model.is_featured = bool(data["is_featured"])
+    if "is_public" in data and data["is_public"] is not None:
+        model.is_public = bool(data["is_public"])
 
     db.commit()
-    return {"ok": True}
+    db.refresh(model)
+    return {
+        "ok": True,
+        "id": model.id,
+        "title": model.title,
+        "description": model.description,
+        "category_id": model.category_id,
+        "category_name": model.category_name,
+        "price": model.price,
+        "message": "Modelo atualizado com sucesso."
+    }
 
 @app.get("/api/admin/models/{model_id}/download")
 def download_model_3d(

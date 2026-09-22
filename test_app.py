@@ -124,10 +124,48 @@ def test_multipart_and_gallery_upload():
         assert "scythe.stl" in namelist
     print(f"[OK] Download Consolidado .ZIP: Verificado ({len(dl_res.content)} bytes contendo body.stl, head.stl, scythe.stl).")
 
+def test_edit_model():
+    """Testa edição/correção de título, descrição, categoria e preço via PATCH."""
+    login_res = client.post("/api/auth/login", json={
+        "username": ADMIN_USERNAME,
+        "password": ADMIN_PASSWORD
+    })
+    assert login_res.status_code == 200
+
+    # Busca modelos para pegar um ID existente
+    models_res = client.get("/api/admin/models", cookies=login_res.cookies)
+    assert models_res.status_code == 200
+    models = models_res.json()
+    assert len(models) > 0
+    target_id = models[0]["id"]
+
+    # Atualiza título e corrige descrição
+    patch_res = client.patch(
+        f"/api/admin/models/{target_id}",
+        json={
+            "title": "BABY REAPER - Edição Especial",
+            "description": "BABY REAPER miniaturas colecionáveis de alta precisão, escolha o seu!",
+            "price": 55.00,
+            "category_id": 1,
+            "show_price": True,
+            "is_featured": True,
+            "order_count": 25
+        },
+        cookies=login_res.cookies
+    )
+    assert patch_res.status_code == 200
+    res_data = patch_res.json()
+    assert res_data["ok"] is True
+    assert res_data["title"] == "BABY REAPER - Edição Especial"
+    assert "miniaturas colecionáveis" in res_data["description"]
+    print(f"[OK] Edição de Modelo (PATCH): Título e descrição corrigidos com sucesso para o modelo {target_id}.")
+
 if __name__ == "__main__":
     test_public_catalog_anti_f12()
     test_protected_download_unauthorized()
     test_admin_login_and_download()
     test_order_submission()
     test_multipart_and_gallery_upload()
+    test_edit_model()
     print("\nTODOS OS TESTES DE SEGURANÇA E FUNCIONALIDADES PASSARAM COM SUCESSO!")
+
