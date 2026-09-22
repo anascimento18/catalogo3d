@@ -160,6 +160,33 @@ def test_edit_model():
     assert "miniaturas colecionáveis" in res_data["description"]
     print(f"[OK] Edição de Modelo (PATCH): Título e descrição corrigidos com sucesso para o modelo {target_id}.")
 
+def test_delete_and_clear_orders():
+    """Testa exclusão de orçamento individual e limpeza total do histórico."""
+    login_res = client.post("/api/auth/login", json={
+        "username": ADMIN_USERNAME,
+        "password": ADMIN_PASSWORD
+    })
+    assert login_res.status_code == 200
+
+    # Busca lista de pedidos para pegar um ID
+    orders_res = client.get("/api/admin/orders", cookies=login_res.cookies)
+    assert orders_res.status_code == 200
+    orders = orders_res.json()
+    assert len(orders) > 0
+    order_id = orders[0]["id"]
+
+    # Exclui o pedido individual
+    del_res = client.delete(f"/api/admin/orders/{order_id}", cookies=login_res.cookies)
+    assert del_res.status_code == 200
+    assert del_res.json()["ok"] is True
+    print(f"[OK] Exclusão de Pedido Individual: Pedido {order_id} removido com sucesso.")
+
+    # Limpa todo o histórico
+    clear_res = client.delete("/api/admin/orders", cookies=login_res.cookies)
+    assert clear_res.status_code == 200
+    assert clear_res.json()["ok"] is True
+    print("[OK] Limpeza Total do Histórico de Orçamentos: Histórico limpo com sucesso.")
+
 if __name__ == "__main__":
     test_public_catalog_anti_f12()
     test_protected_download_unauthorized()
@@ -167,5 +194,6 @@ if __name__ == "__main__":
     test_order_submission()
     test_multipart_and_gallery_upload()
     test_edit_model()
+    test_delete_and_clear_orders()
     print("\nTODOS OS TESTES DE SEGURANÇA E FUNCIONALIDADES PASSARAM COM SUCESSO!")
 

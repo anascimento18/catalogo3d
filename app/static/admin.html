@@ -300,12 +300,18 @@
 
     <!-- ABA 3: PEDIDOS RECEBIDOS -->
     <div id="tabOrders" class="tab-content" style="display: none;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
         <h3 style="font-size: 18px; font-weight: 700;">Histórico de Orçamentos Recebidos</h3>
-        <button class="btn-action" onclick="loadAdminOrders()">
-          <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i>
-          <span>Atualizar</span>
-        </button>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-action" onclick="loadAdminOrders()">
+            <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i>
+            <span>Atualizar</span>
+          </button>
+          <button class="btn-action delete" onclick="clearAllOrders()" style="border-color: rgba(239, 35, 60, 0.4); color: #f87171;">
+            <i data-lucide="trash-2" style="width: 14px; height: 14px;"></i>
+            <span>Limpar Histórico</span>
+          </button>
+        </div>
       </div>
 
       <div style="overflow-x: auto; background: rgba(24, 24, 27, 0.6); border: 1px solid var(--border-subtle); border-radius: 12px;">
@@ -318,7 +324,7 @@
               <th>Modelo Solicitado</th>
               <th>Preço Cadastrado</th>
               <th>Observações</th>
-              <th style="text-align: right;">Contato</th>
+              <th style="text-align: right;">Ações</th>
             </tr>
           </thead>
           <tbody id="ordersTableBody">
@@ -396,7 +402,7 @@
 
   </div>
 
-  <script src="/static/js/admin.js?v=3.3"></script>
+  <script src="/static/js/admin.js?v=3.6"></script>
   <script>
     lucide.createIcons();
   </script>

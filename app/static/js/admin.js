@@ -572,11 +572,15 @@ async function loadAdminOrders() {
           <td>${escapeHtml(o.model_title)}</td>
           <td>${o.show_price && o.price_registered ? 'R$ ' + o.price_registered.toFixed(2) : 'Sob Consulta (R$ ' + o.price_registered.toFixed(2) + ')'}</td>
           <td><small style="color: #a1a1aa;">${escapeHtml(o.customer_notes || 'Nenhuma')}</small></td>
-          <td style="text-align: right;">
-            <a href="${waUrl}" target="_blank" class="btn-action" style="background: rgba(37, 211, 102, 0.15); color: #4ade80; border-color: rgba(37, 211, 102, 0.3);">
+          <td style="text-align: right; white-space: nowrap;">
+            <a href="${waUrl}" target="_blank" class="btn-action" style="background: rgba(37, 211, 102, 0.15); color: #4ade80; border-color: rgba(37, 211, 102, 0.3);" title="Conversar no WhatsApp">
               <i data-lucide="message-circle" style="width:14px;height:14px;"></i>
               <span>Conversar</span>
             </a>
+            <button class="btn-action delete" onclick="deleteOrder(${o.id})" title="Excluir este orçamento">
+              <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
+              <span>Excluir</span>
+            </button>
           </td>
         </tr>
       `;
@@ -587,6 +591,35 @@ async function loadAdminOrders() {
     console.error('Erro ao carregar pedidos:', err);
   }
 }
+
+// Exclui um pedido individual
+window.deleteOrder = async function(id) {
+  if (!confirm('Deseja excluir este orçamento do histórico?')) return;
+  try {
+    const res = await fetch(`/api/admin/orders/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao excluir orçamento');
+    loadAdminOrders();
+  } catch (err) {
+    alert(err.message || 'Erro ao excluir');
+  }
+};
+
+// Limpa todo o histórico de pedidos
+window.clearAllOrders = async function() {
+  if (!confirm('ATENÇÃO: Deseja apagar TODO o histórico de orçamentos e pedidos de teste?\nEsta ação removerá todos os registros da tabela.')) {
+    return;
+  }
+  try {
+    const res = await fetch('/api/admin/orders', { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao limpar histórico');
+    alert('Histórico de orçamentos limpo com sucesso!');
+    loadAdminOrders();
+  } catch (err) {
+    alert(err.message || 'Erro ao limpar histórico');
+  }
+};
 
 // 8. Logout
 function setupLogout() {

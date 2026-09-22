@@ -588,3 +588,28 @@ def get_orders(
         }
         for o in orders
     ]
+
+@app.delete("/api/admin/orders/{order_id}")
+def delete_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    admin: str = Depends(get_current_admin)
+):
+    """Exclui um pedido/orçamento específico do histórico."""
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+    db.delete(order)
+    db.commit()
+    return {"ok": True, "message": "Pedido removido do histórico com sucesso."}
+
+@app.delete("/api/admin/orders")
+def clear_all_orders(
+    db: Session = Depends(get_db),
+    admin: str = Depends(get_current_admin)
+):
+    """Limpa todo o histórico de orçamentos e pedidos de teste."""
+    count = db.query(Order).delete()
+    db.commit()
+    return {"ok": True, "deleted_count": count, "message": "Todo o histórico de orçamentos foi limpo."}
+
