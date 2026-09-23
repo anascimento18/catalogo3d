@@ -193,7 +193,8 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
 
     # 2. Comando especial de autorização por senha
     if text.startswith("/auth"):
-        parts = text.split()
+        message_id = message.get("message_id") if message else None
+        parts = text.split(maxsplit=1)
         if len(parts) >= 2 and parts[1].strip() == ADMIN_PASSWORD:
             AUTHORIZED_CHATS.add(str(user_id))
             AUTHORIZED_CHATS.add(str(chat_id))
@@ -208,7 +209,7 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
         else:
             await send_telegram_reply(
                 bot_token, chat_id,
-                "❌ *Senha incorreta.*\nDigite: `/auth <sua_senha_admin>`"
+                "❌ *Acesso negado.*\nDigite: `/auth <senha>`"
             )
             return {"ok": False}
 
@@ -220,8 +221,7 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             f"🔒 *Acesso Restrito ao Administrador*\n\n"
             f"Seu ID no Telegram é: `{user_id}`\n\n"
             f"Para autorizar este aparelho, digite:\n"
-            f"`/auth <sua_senha_admin>`\n"
-            f"_(Ex: `/auth 3aField@2026`)_"
+            f"`/auth <senha>`"
         )
         return {"ok": False, "error": "Não autorizado"}
 

@@ -181,6 +181,10 @@ def test_delete_and_clear_orders():
     assert del_res.json()["ok"] is True
     print(f"[OK] Exclusão de Pedido Individual: Pedido {order_id} removido com sucesso.")
 
+    # Limpa todos os pedidos de teste para não poluir o banco de dados
+    clear_res = client.delete("/api/admin/orders", cookies=login_res.cookies)
+    assert clear_res.status_code == 200
+    assert clear_res.json()["ok"] is True
     print("[OK] Limpeza Total do Histórico de Orçamentos: Histórico limpo com sucesso.")
 
 def test_telegram_wizard_auth():
