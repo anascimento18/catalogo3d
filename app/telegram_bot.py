@@ -291,7 +291,7 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
 
         await send_telegram_reply(
             bot_token, chat_id,
-            "🚀 *Cadastro de Novo Modelo 3D (Passo 1 de 6)*\n\n"
+            "🚀 *Cadastro de Novo Modelo 3D (Passo 1 de 5)*\n\n"
             "📁 *Envie o(s) Arquivo(s) 3D:*\n"
             "Envie o arquivo `.STL`, `.3MF`, `.STEP`, `.OBJ` ou `.ZIP`.\n\n"
             "💡 *Dicas importantes:*\n"
@@ -330,8 +330,8 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
                 bot_token, chat_id,
                 f"✅ *Arquivos 3D concluídos com sucesso!* ({len(wizard['files_3d'])} arquivo(s), {total_parts} peça(s)).\n\n"
                 f"---\n"
-                f"🖼️ *Passo 2 de 6: Foto de Capa Principal*\n"
-                f"Envie agora a **Foto de Capa Principal** da peça (esta foto será a vitrine principal no catálogo)."
+                f"🖼️ *Passo 2 de 5: Foto da Peça (Capa)*\n"
+                f"Envie agora a foto principal da peça (esta foto será a vitrine no catálogo)."
             )
             return {"ok": True}
 
@@ -430,8 +430,8 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
                     f"✅ *Pacote ZIP recebido!*\n"
                     f"📁 `{file_name}` ({file_size/1024/1024:.2f} MB) — *{parts_count} peça(s) detectada(s)*.\n\n"
                     f"---\n"
-                    f"🖼️ *Passo 2 de 6: Foto de Capa Principal*\n"
-                    f"Envie agora a **Foto de Capa Principal** da peça (esta foto será a vitrine principal no catálogo)."
+                    f"🖼️ *Passo 2 de 5: Foto da Peça (Capa)*\n"
+                    f"Envie agora a foto principal da peça (esta foto será a vitrine no catálogo)."
                 )
                 return {"ok": True}
             else:
@@ -489,96 +489,71 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             "path": target_cover
         }
 
-        wizard["step"] = "WAIT_GALLERY"
-
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "➡️ Concluir Fotos (Sem Fotos Extras)", "callback_data": "gallery_done"}]
-            ]
-        }
+        # Avança direto para o título! Se tiver só 1 foto, basta digitar o nome. Se tiver mais, pode enviar mais fotos!
+        wizard["step"] = "WAIT_TITLE"
 
         await send_telegram_reply(
             bot_token, chat_id,
             f"✅ *Foto de Capa recebida com sucesso!*\n\n"
             f"---\n"
-            f"📸 *Passo 3 de 6: Fotos Adicionais da Galeria (Opcional)*\n"
-            f"Deseja adicionar mais fotos deste modelo para o carrossel na vitrine?\n\n"
-            f"• Se tiver mais fotos, **envie outra foto agora**.\n"
-            f"• Se NÃO tiver mais fotos, clique no botão abaixo ou digite /concluir:",
-            reply_markup=keyboard
+            f"📝 *Passo 3 de 5: Título do Modelo*\n"
+            f"Digite o nome da peça (ex: _Casinhas Pinha Natal_):\n\n"
+            f"💡 _Se tiver mais fotos para a vitrine, pode enviar outra foto agora mesmo!_"
         )
         return {"ok": True}
 
     # =========================================================================
-    # PASSO 3: Aguardando Fotos Adicionais ou Conclusão da Galeria
+    # Compatibilidade com sessões anteriores em WAIT_GALLERY
     # =========================================================================
     if step == "WAIT_GALLERY":
-        # Se clicou no botão "Concluir Fotos" ou digitou /concluir ou "não"
-        if callback_data == "gallery_done" or text.lower() in ("/concluir", "/concluir_fotos", "não", "nao", "concluir", "pular", "pronto", "ok"):
-            wizard["step"] = "WAIT_TITLE"
-            total_g = len(wizard["gallery_imgs"])
-            await send_telegram_reply(
-                bot_token, chat_id,
-                f"✅ *Galeria definida com sucesso!* ({total_g} fotos adicionais cadastradas).\n\n"
-                f"---\n"
-                f"📝 *Passo 4 de 6: Título do Modelo*\n"
-                f"Digite o nome/título da peça:\n"
-                f"_Exemplo: BABY REAPER, Vaso Geométrico Poligonal, Suporte Articulado..._"
-            )
-            return {"ok": True}
+        wizard["step"] = "WAIT_TITLE"
+        step = "WAIT_TITLE"
 
-        # Recebeu mais uma foto para a galeria
-        file_id = None
-        orig_name = f"gal_{len(wizard['gallery_imgs'])+1}.jpg"
+    # =========================================================================
+    # PASSO 3: Aguardando Título (ou Fotos Extras da Galeria)
+    # =========================================================================
+    if step == "WAIT_TITLE":
+        # Se o usuário enviou outra foto em vez de texto, adiciona à galeria!
+        extra_file_id = None
+        extra_orig_name = f"gal_{len(wizard['gallery_imgs'])+1}.jpg"
 
         if photos:
-            file_id = photos[-1].get("file_id")
+            extra_file_id = photos[-1].get("file_id")
         elif document:
             doc_ext = Path(document.get("file_name", "")).suffix.lower()
             if doc_ext in ALLOWED_IMG_EXTENSIONS:
-                file_id = document.get("file_id")
-                orig_name = document.get("file_name")
+                extra_file_id = document.get("file_id")
+                extra_orig_name = document.get("file_name")
 
-        if file_id:
-            target_gal = wizard["temp_dir"] / orig_name
-            success, err_msg = await download_telegram_file(bot_token, file_id, target_gal)
+        if extra_file_id:
+            await send_telegram_reply(bot_token, chat_id, "⏳ Baixando foto adicional...")
+            target_gal = wizard["temp_dir"] / extra_orig_name
+            success, err_msg = await download_telegram_file(bot_token, extra_file_id, target_gal)
             if success:
                 wizard["gallery_imgs"].append({
-                    "name": orig_name,
+                    "name": extra_orig_name,
                     "path": target_gal
                 })
                 count = len(wizard["gallery_imgs"])
-                keyboard = {
-                    "inline_keyboard": [
-                        [{"text": f"➡️ Concluir Galeria ({count} extras)", "callback_data": "gallery_done"}]
-                    ]
-                }
+                total_all = 1 + count
                 await send_telegram_reply(
                     bot_token, chat_id,
-                    f"📸 *Foto extra #{count} adicionada à galeria!*\n\n"
-                    f"Envie outra foto se desejar, ou clique no botão abaixo para prosseguir:",
-                    reply_markup=keyboard
+                    f"📸 *Foto extra #{count} adicionada!* (Total: {total_all} fotos cadastradas).\n\n"
+                    f"📝 Digite agora o **Título do modelo** (ou envie mais uma foto se desejar):"
                 )
                 return {"ok": True}
             else:
                 await send_telegram_reply(
                     bot_token, chat_id,
-                    f"⚠️ Falha ao baixar foto adicional: {err_msg}. Tente enviar novamente ou conclua no botão abaixo:",
-                    reply_markup={"inline_keyboard": [[{"text": "➡️ Concluir Fotos", "callback_data": "gallery_done"}]]}
+                    f"⚠️ Falha ao baixar foto adicional: {err_msg}. Digite o título do modelo para continuar:"
                 )
                 return {"ok": True}
 
-        await send_telegram_reply(
-            bot_token, chat_id,
-            "💡 Envie mais uma foto para o carrossel, ou clique em **Concluir Fotos** no botão abaixo:",
-            reply_markup={"inline_keyboard": [[{"text": "➡️ Concluir Fotos", "callback_data": "gallery_done"}]]}
-        )
-        return {"ok": True}
+        # Se clicou em algum callback antigo de galeria
+        if callback_data == "gallery_done":
+            await send_telegram_reply(bot_token, chat_id, "📝 Digite o título do modelo:")
+            return {"ok": True}
 
-    # =========================================================================
-    # PASSO 4: Aguardando Título
-    # =========================================================================
-    if step == "WAIT_TITLE":
         if not text:
             await send_telegram_reply(bot_token, chat_id, "⚠️ Digite o título do modelo:")
             return {"ok": True}
@@ -609,14 +584,14 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             bot_token, chat_id,
             f"✅ *Título salvo:* {text}\n\n"
             f"---\n"
-            f"🏷️ *Passo 5 de 6: Categoria*\n"
+            f"🏷️ *Passo 4 de 5: Categoria*\n"
             f"Selecione a categoria deste modelo clicando em um dos botões abaixo:",
             reply_markup={"inline_keyboard": keyboard_buttons}
         )
         return {"ok": True}
 
     # =========================================================================
-    # PASSO 5: Aguardando Categoria
+    # PASSO 4: Aguardando Categoria
     # =========================================================================
     if step == "WAIT_CATEGORY":
         cat_id = None
@@ -648,7 +623,7 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             bot_token, chat_id,
             f"✅ *Categoria selecionada:* {wizard['category_name']}\n\n"
             f"---\n"
-            f"💰 *Passo 6 de 6: Preço do Modelo*\n"
+            f"💰 *Passo 5 de 5: Preço do Modelo*\n"
             f"Digite o preço da peça em Reais (ex: `50` ou `50,00`).\n"
             f"_Se for sob consulta / orçamento personalizado, digite `0`._"
         )
