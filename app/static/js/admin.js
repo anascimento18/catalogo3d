@@ -91,6 +91,28 @@ async function loadAdminModels() {
         ? `<span style="color:#a1a1aa;">📸 ${m.gallery_images.length + 1} fotos</span> • `
         : '';
 
+      const linkInfo = m.external_url 
+        ? `<span style="color:#c084fc;font-weight:600;">🔗 Link do Site</span> • ` 
+        : '';
+
+      const fileOrUrlText = m.file_3d_filename 
+        ? escapeHtml(m.file_3d_filename) 
+        : (m.external_url ? `<a href="${escapeHtml(m.external_url)}" target="_blank" style="color:#c084fc;text-decoration:underline;">${escapeHtml(m.external_url.substring(0, 45))}...</a>` : 'Sem arquivo');
+
+      const externalBtn = m.external_url ? `
+        <a href="${escapeHtml(m.external_url)}" target="_blank" rel="noopener noreferrer" class="btn-action" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border-color: rgba(168, 85, 247, 0.35);" title="Abrir site/personalizador original em nova aba">
+          <i data-lucide="external-link" style="width:14px;height:14px;"></i>
+          <span>Abrir Site</span>
+        </a>
+      ` : '';
+
+      const downloadBtn = m.file_3d_filename ? `
+        <a href="/api/admin/models/${m.id}/download" class="btn-action download" title="Baixar arquivo 3D original">
+          <i data-lucide="download" style="width:14px;height:14px;"></i>
+          <span>Download 3D</span>
+        </a>
+      ` : '';
+
       return `
         <tr>
           <td style="width: 60px;">
@@ -98,7 +120,7 @@ async function loadAdminModels() {
           </td>
           <td>
             <strong>${escapeHtml(m.title)}</strong><br>
-            <small style="color: #71717a;">${partsInfo}${photosInfo}${escapeHtml(m.file_3d_filename)}</small>
+            <small style="color: #71717a;">${partsInfo}${photosInfo}${linkInfo}${fileOrUrlText}</small>
           </td>
           <td>${escapeHtml(m.category_name)}</td>
           <td><span class="badge-tag">${m.file_format}</span></td>
@@ -106,14 +128,12 @@ async function loadAdminModels() {
           <td>${showPriceBadge}</td>
           <td>🔥 ${m.order_count || 0}</td>
           <td style="text-align: right; white-space: nowrap;">
-            <button class="btn-action edit" onclick="openEditModal(${m.id})" title="Editar título, descrição e dados" style="border-color: rgba(56, 189, 248, 0.4); color: #38bdf8;">
+            <button class="btn-action edit" onclick="openEditModal(${m.id})" title="Editar dados e link" style="border-color: rgba(56, 189, 248, 0.4); color: #38bdf8;">
               <i data-lucide="edit-3" style="width:14px;height:14px;"></i>
               <span>Editar</span>
             </button>
-            <a href="/api/admin/models/${m.id}/download" class="btn-action download" title="Baixar arquivo 3D original">
-              <i data-lucide="download" style="width:14px;height:14px;"></i>
-              <span>Download 3D</span>
-            </a>
+            ${externalBtn}
+            ${downloadBtn}
             <button class="btn-action delete" onclick="deleteModel(${m.id}, '${escapeHtml(m.title)}')" title="Excluir modelo">
               <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
               <span>Excluir</span>
@@ -159,6 +179,8 @@ window.openEditModal = function(id) {
   document.getElementById('editModelFeatured').checked = !!model.is_featured;
   document.getElementById('editModelOrderCount').value = model.order_count || 0;
   document.getElementById('editModelDesc').value = model.description || '';
+  const urlInput = document.getElementById('editModelExternalUrl');
+  if (urlInput) urlInput.value = model.external_url || '';
 
   // Popula categorias no select de edição
   const catSelect = document.getElementById('editModelCategory');
@@ -205,6 +227,7 @@ function setupEditForm() {
     const isFeatured = document.getElementById('editModelFeatured').checked;
     const orderCount = parseInt(document.getElementById('editModelOrderCount').value || '0');
     const desc = document.getElementById('editModelDesc').value.trim();
+    const externalUrl = (document.getElementById('editModelExternalUrl')?.value || '').trim();
 
     btn.disabled = true;
     btn.innerHTML = `<span>Salvando alterações...</span>`;
@@ -220,7 +243,8 @@ function setupEditForm() {
           show_price: showPrice,
           is_featured: isFeatured,
           order_count: orderCount,
-          description: desc
+          description: desc,
+          external_url: externalUrl
         })
       });
 
@@ -264,6 +288,61 @@ function setupEditForm() {
     }
   });
 }
+
+// Controle de Alternância da Origem 3D (Arquivo Local vs Link do Personalizador)
+window.switch3DSource = function(mode) {
+  const containerFile = document.getElementById('containerFile3D');
+  const containerLink = document.getElementById('containerLink3D');
+  const badge = document.getElementById('sourceBadge');
+  const btnFile = document.getElementById('btnSourceFile');
+  const btnLink = document.getElementById('btnSourceLink');
+  const btnBoth = document.getElementById('btnSourceBoth');
+
+  const allBtns = [btnFile, btnLink, btnBoth].filter(Boolean);
+  allBtns.forEach(b => {
+    b.style.background = 'transparent';
+    b.style.color = '#a1a1aa';
+  });
+
+  if (mode === 'file') {
+    if (containerFile) containerFile.style.display = 'block';
+    if (containerLink) containerLink.style.display = 'none';
+    if (badge) {
+      badge.textContent = 'Arquivo 3D Local';
+      badge.style.color = '#38bdf8';
+      badge.style.background = 'rgba(56, 189, 248, 0.15)';
+    }
+    if (btnFile) {
+      btnFile.style.background = '#2563eb';
+      btnFile.style.color = '#fff';
+    }
+  } else if (mode === 'link') {
+    if (containerFile) containerFile.style.display = 'none';
+    if (containerLink) containerLink.style.display = 'block';
+    if (badge) {
+      badge.textContent = 'Link do Site / Personalizador';
+      badge.style.color = '#c084fc';
+      badge.style.background = 'rgba(168, 85, 247, 0.15)';
+    }
+    if (btnLink) {
+      btnLink.style.background = '#9333ea';
+      btnLink.style.color = '#fff';
+    }
+  } else if (mode === 'both') {
+    if (containerFile) containerFile.style.display = 'block';
+    if (containerLink) containerLink.style.display = 'block';
+    if (badge) {
+      badge.textContent = 'Arquivo 3D + Link';
+      badge.style.color = '#34d399';
+      badge.style.background = 'rgba(52, 211, 153, 0.15)';
+    }
+    if (btnBoth) {
+      btnBoth.style.background = '#059669';
+      btnBoth.style.color = '#fff';
+    }
+  }
+  if (window.lucide) lucide.createIcons();
+};
 
 // 5. Configuração dos Dropzones com Suporte a Múltiplos Arquivos e Galeria
 function setupDropzones() {
@@ -448,8 +527,11 @@ function setupUploadForm() {
     e.preventDefault();
     alertBox.style.display = 'none';
 
-    if (!selectedFiles3D || selectedFiles3D.length === 0) {
-      alert('Por favor, selecione pelo menos um arquivo 3D (.STL, .3MF, etc.).');
+    const externalUrl = (document.getElementById('modelExternalUrl')?.value || '').trim();
+    const hasFiles = selectedFiles3D && selectedFiles3D.length > 0;
+
+    if (!hasFiles && !externalUrl) {
+      alert('Por favor, selecione pelo menos um arquivo 3D (.STL, .3MF, .ZIP) OU insira o link do site/personalizador.');
       return;
     }
     if (!selectedFileImg) {
@@ -476,6 +558,7 @@ function setupUploadForm() {
     formData.append('is_featured', isFeatured);
     formData.append('order_count', orderCount);
     formData.append('description', desc);
+    formData.append('external_url', externalUrl);
 
     // Adiciona todos os arquivos 3D
     selectedFiles3D.forEach(f => {
@@ -502,7 +585,8 @@ function setupUploadForm() {
       // Sucesso
       const partsMsg = data.parts_count > 1 ? ` (${data.parts_count} peças compactadas)` : '';
       const galMsg = data.gallery_count > 1 ? ` com ${data.gallery_count} fotos na galeria` : '';
-      alertBox.textContent = `Modelo "${title}" cadastrado com sucesso!${partsMsg}${galMsg}`;
+      const linkMsg = externalUrl ? ' com link do site salvo' : '';
+      alertBox.textContent = `Modelo "${title}" cadastrado com sucesso!${partsMsg}${galMsg}${linkMsg}`;
       alertBox.style.background = 'rgba(34, 197, 94, 0.15)';
       alertBox.style.border = '1px solid rgba(34, 197, 94, 0.3)';
       alertBox.style.color = '#86efac';
@@ -517,6 +601,10 @@ function setupUploadForm() {
       if (coverPreview) coverPreview.style.display = 'none';
       document.getElementById('label3D').textContent = 'Arraste os arquivos 3D ou .ZIP aqui ou clique para selecionar';
       document.getElementById('labelImg').textContent = 'Arraste a foto de capa aqui ou clique para selecionar';
+      if (document.getElementById('modelExternalUrl')) {
+        document.getElementById('modelExternalUrl').value = '';
+      }
+      switch3DSource('file');
       if (document.getElementById('labelGallery')) {
         document.getElementById('labelGallery').textContent = 'Arraste fotos adicionais para a galeria ou clique para selecionar';
       }
@@ -564,6 +652,13 @@ async function loadAdminOrders() {
       const cleanPhone = o.customer_phone.replace(/\D/g, '');
       const waUrl = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(`Olá ${o.customer_name}! Recebi seu pedido do modelo 3D "${o.model_title}". Vamos combinar os detalhes da impressão?`)}`;
 
+      const siteBtn = o.external_url ? `
+        <a href="${escapeHtml(o.external_url)}" target="_blank" rel="noopener noreferrer" class="btn-action" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border-color: rgba(168, 85, 247, 0.35);" title="Abrir site/personalizador deste modelo em nova aba">
+          <i data-lucide="external-link" style="width:14px;height:14px;"></i>
+          <span>Abrir Site</span>
+        </a>
+      ` : '';
+
       return `
         <tr>
           <td><small style="color: #71717a;">${o.created_at}</small></td>
@@ -573,6 +668,7 @@ async function loadAdminOrders() {
           <td>${o.show_price && o.price_registered ? 'R$ ' + o.price_registered.toFixed(2) : 'Sob Consulta (R$ ' + o.price_registered.toFixed(2) + ')'}</td>
           <td><small style="color: #a1a1aa;">${escapeHtml(o.customer_notes || 'Nenhuma')}</small></td>
           <td style="text-align: right; white-space: nowrap;">
+            ${siteBtn}
             <a href="${waUrl}" target="_blank" class="btn-action" style="background: rgba(37, 211, 102, 0.15); color: #4ade80; border-color: rgba(37, 211, 102, 0.3);" title="Conversar no WhatsApp">
               <i data-lucide="message-circle" style="width:14px;height:14px;"></i>
               <span>Conversar</span>

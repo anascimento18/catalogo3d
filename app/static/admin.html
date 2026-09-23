@@ -209,14 +209,54 @@
 
         <form id="uploadForm">
           
-          <!-- Dropzone Arquivo 3D -->
-          <div class="form-group">
-            <label style="font-weight: 600; margin-bottom: 6px; display: block;">1. Arquivo(s) 3D Bruto (.STL, .3MF, .OBJ, .STEP, .ZIP) * <span style="font-size: 12px; color: #38bdf8; font-weight: normal;">(Pode selecionar múltiplas peças de uma vez)</span></label>
-            <label for="inputFile3D" class="dropzone" id="dropzone3D" style="display: block;">
-              <i data-lucide="file-box" style="width: 36px; height: 36px; color: #60a5fa; margin: 0 auto 8px;"></i>
-              <p id="label3D" style="font-size: 14px; font-weight: 600;">Arraste os arquivos 3D ou .ZIP aqui ou clique para selecionar</p>
-            </label>
-            <input type="file" id="inputFile3D" style="display: none;" accept=".stl,.3mf,.obj,.step,.stp,.iges,.igs,.fbx,.gltf,.glb,.blend,.scad,.zip,.rar,.7z" multiple required>
+          <!-- Fonte do Modelo 3D: Arquivo Local e/ou Link de Personalizador -->
+          <div class="form-group" style="background: rgba(9, 9, 11, 0.4); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+              <label style="font-weight: 700; margin: 0; display: flex; align-items: center; gap: 8px;">
+                <span>1. Origem do Modelo 3D *</span>
+                <span id="sourceBadge" style="font-size: 11px; padding: 2px 8px; border-radius: 12px; background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-weight: 600;">Arquivo 3D Local</span>
+              </label>
+              
+              <!-- Seletor de Tipo de Origem -->
+              <div style="display: flex; gap: 4px; background: rgba(0,0,0,0.6); padding: 4px; border-radius: 8px; border: 1px solid var(--border-subtle);">
+                <button type="button" id="btnSourceFile" class="source-toggle-btn active" onclick="switch3DSource('file')" style="padding: 6px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: none; background: #2563eb; color: #fff; display: flex; align-items: center; gap: 6px; transition: all 0.2s;">
+                  <i data-lucide="file-up" style="width: 14px; height: 14px;"></i>
+                  <span>Arquivo 3D</span>
+                </button>
+                <button type="button" id="btnSourceLink" class="source-toggle-btn" onclick="switch3DSource('link')" style="padding: 6px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: none; background: transparent; color: #a1a1aa; display: flex; align-items: center; gap: 6px; transition: all 0.2s;">
+                  <i data-lucide="link" style="width: 14px; height: 14px;"></i>
+                  <span>Link do Site / Personalizador</span>
+                </button>
+                <button type="button" id="btnSourceBoth" class="source-toggle-btn" onclick="switch3DSource('both')" style="padding: 6px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: none; background: transparent; color: #a1a1aa; display: flex; align-items: center; gap: 6px; transition: all 0.2s;">
+                  <i data-lucide="layers" style="width: 14px; height: 14px;"></i>
+                  <span>Ambos</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Opção A: Dropzone Arquivo 3D -->
+            <div id="containerFile3D">
+              <label for="inputFile3D" class="dropzone" id="dropzone3D" style="display: block;">
+                <i data-lucide="file-box" style="width: 36px; height: 36px; color: #60a5fa; margin: 0 auto 8px;"></i>
+                <p id="label3D" style="font-size: 14px; font-weight: 600;">Arraste os arquivos 3D ou .ZIP aqui ou clique para selecionar</p>
+                <span style="font-size: 12px; color: #38bdf8;">(Pode selecionar múltiplas peças de uma vez: .STL, .3MF, .OBJ, .STEP, .ZIP)</span>
+              </label>
+              <input type="file" id="inputFile3D" style="display: none;" accept=".stl,.3mf,.obj,.step,.stp,.iges,.igs,.fbx,.gltf,.glb,.blend,.scad,.zip,.rar,.7z" multiple>
+            </div>
+
+            <!-- Opção B: Input Link do Site / Personalizador -->
+            <div id="containerLink3D" style="display: none; margin-top: 10px;">
+              <div style="background: rgba(168, 85, 247, 0.08); border: 1px dashed rgba(168, 85, 247, 0.35); border-radius: 10px; padding: 16px;">
+                <label for="modelExternalUrl" style="font-size: 13.5px; font-weight: 600; color: #d8b4fe; display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
+                  <i data-lucide="globe" style="width: 16px; height: 16px; color: #c084fc;"></i>
+                  <span>Link / URL do Site Personalizador ou Repositório</span>
+                </label>
+                <input type="url" id="modelExternalUrl" class="form-input" placeholder="Ex: https://makerworld.com/pt/models/12345 ou link do site personalizador" style="border-color: rgba(168, 85, 247, 0.4); background: rgba(0,0,0,0.5);">
+                <p style="font-size: 12px; color: #a1a1aa; margin: 8px 0 0 2px;">
+                  💡 <em>Você não precisa baixar nem subir o arquivo agora! Quando receber um pedido, basta clicar em <strong>"Abrir Site"</strong> no painel para ir direto ao personalizador.</em>
+                </p>
+              </div>
+            </div>
           </div>
 
           <!-- Dropzone Imagem de Capa -->
@@ -379,6 +419,14 @@
             </div>
 
             <div class="form-group">
+              <label for="editModelExternalUrl" style="display: flex; align-items: center; gap: 6px; font-weight: 600;">
+                <i data-lucide="link" style="width: 14px; height: 14px; color: #c084fc;"></i>
+                <span>Link do Site / Personalizador (Opcional)</span>
+              </label>
+              <input type="url" id="editModelExternalUrl" class="form-input" placeholder="https://makerworld.com/... ou link do site personalizador">
+            </div>
+
+            <div class="form-group">
               <label for="editModelOrderCount">Quantidade de Pedidos (Prova Social)</label>
               <input type="number" id="editModelOrderCount" class="form-input">
             </div>
@@ -402,7 +450,7 @@
 
   </div>
 
-  <script src="/static/js/admin.js?v=3.6"></script>
+  <script src="/static/js/admin.js?v=4.0"></script>
   <script>
     lucide.createIcons();
   </script>

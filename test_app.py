@@ -243,6 +243,59 @@ def test_telegram_wizard_auth():
 
     print("[OK] Telegram Bot Wizard: Autenticação dinâmica e início de /newmodelo validados com sucesso!")
 
+def test_external_url_model_workflow():
+    """Testa cadastro de modelo via link externo (sem arquivo 3D físico) e redirecionamento."""
+    # 1. Login
+    login_res = client.post("/api/auth/login", json={
+        "username": ADMIN_USERNAME,
+        "password": ADMIN_PASSWORD
+    })
+    assert login_res.status_code == 200
+
+    # 2. Cadastro com link de personalizador e foto de capa (sem arquivos 3D físicos)
+    files = [
+        ("image", ("cover_maker.jpg", b"\xFF\xD8\xFF\xE0 Fake JPG Cover Maker", "image/jpeg"))
+    ]
+    data = {
+        "title": "Chaveiro Personalizado MakerWorld",
+        "category_id": 1,
+        "price": 35.00,
+        "show_price": True,
+        "external_url": "https://makerworld.com/pt/models/123456#profileId-789"
+    }
+    upload_res = client.post("/api/admin/models", data=data, files=files, cookies=login_res.cookies)
+    assert upload_res.status_code == 200
+    res_data = upload_res.json()
+    model_id = res_data["id"]
+    assert res_data["external_url"] == "https://makerworld.com/pt/models/123456#profileId-789"
+    print(f"[OK] Cadastro por Link: Modelo {model_id} criado sem arquivo 3D local com sucesso.")
+
+    # 3. Teste de download com redirecionamento para o site
+    dl_res = client.get(f"/api/admin/models/{model_id}/download", cookies=login_res.cookies, follow_redirects=False)
+    assert dl_res.status_code == 303
+    assert dl_res.headers["location"] == "https://makerworld.com/pt/models/123456#profileId-789"
+    print("[OK] Redirecionamento 303: Download do modelo direciona diretamente para o site do personalizador.")
+
+    # 4. Edição do link externo
+    patch_res = client.patch(f"/api/admin/models/{model_id}", json={
+        "external_url": "https://makerworld.com/pt/models/999999"
+    }, cookies=login_res.cookies)
+    assert patch_res.status_code == 200
+    assert patch_res.json()["external_url"] == "https://makerworld.com/pt/models/999999"
+    print("[OK] Edição de Link: URL atualizada com sucesso.")
+
+    # 5. Blindagem F12: Confirma que o link NÃO vaza na vitrine pública
+    cat_res = client.get("/api/public/catalog")
+    assert cat_res.status_code == 200
+    for item in cat_res.json():
+        assert "external_url" not in item, "VULNERABILIDADE F12: external_url vazou na vitrine pública!"
+    print("[OK] Blindagem F12: Link externo do personalizador NUNCA exposto aos visitantes.")
+
+    # 6. Limpeza do modelo de teste
+    del_res = client.delete(f"/api/admin/models/{model_id}", cookies=login_res.cookies)
+    assert del_res.status_code == 200
+    print("[OK] Limpeza: Modelo de teste por link excluído.")
+
 if __name__ == "__main__":
     test_public_catalog_anti_f12()
     test_protected_download_unauthorized()
@@ -251,6 +304,7 @@ if __name__ == "__main__":
     test_multipart_and_gallery_upload()
     test_edit_model()
     test_delete_and_clear_orders()
+    test_external_url_model_workflow()
     test_telegram_wizard_auth()
     print("\nTODOS OS TESTES DE SEGURANÇA E FUNCIONALIDADES PASSARAM COM SUCESSO!")
 

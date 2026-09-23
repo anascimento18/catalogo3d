@@ -23,6 +23,7 @@ async def send_order_notification(order_data: dict, model_data: dict) -> dict:
     price = model_data.get("price", 0.0)
     show_price = model_data.get("show_price", True)
     image_filename = model_data.get("image_filename", "")
+    external_url = model_data.get("external_url", "")
     
     cust_name = order_data.get("customer_name", "Cliente")
     cust_phone = order_data.get("customer_phone", "")
@@ -40,6 +41,8 @@ async def send_order_notification(order_data: dict, model_data: dict) -> dict:
     # URL pública da foto do modelo
     image_url = f"{CATALOG_DOMAIN}/api/public/images/{image_filename}"
 
+    link_line = f"\n🔗 *Link do Site/Personalizador:*\n{external_url}\n" if external_url else ""
+
     # Mensagem formatada para o WhatsApp do André
     message_text = (
         f"📦 *NOVO PEDIDO DE IMPRESSÃO 3D!*\n"
@@ -47,7 +50,8 @@ async def send_order_notification(order_data: dict, model_data: dict) -> dict:
         f"🔹 *Modelo:* {model_title}\n"
         f"🔹 *Categoria:* {category}\n"
         f"💰 *Valor de Referência:* {price_text}\n"
-        f"🆔 *Código do Item:* #{model_data.get('id')}\n\n"
+        f"🆔 *Código do Item:* #{model_data.get('id')}\n"
+        f"{link_line}\n"
         f"👤 *DADOS DO CLIENTE:*\n"
         f"• *Nome:* {cust_name}\n"
         f"• *WhatsApp:* {cust_phone}\n"

@@ -25,10 +25,11 @@ class Model3D(Base):
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     category_name = Column(String(100), default="Geral")
     
-    # Arquivos (Salvos no volume em disco)
+    # Arquivos (Salvos no volume em disco ou link de site/personalizador)
     image_filename = Column(String(255), nullable=False)   # Foto de Capa (Primária)
     gallery_images = Column(Text, default="[]")             # Array JSON de fotos adicionais da galeria
-    file_3d_filename = Column(String(255), nullable=False) # Arquivo 3D ou pacote .ZIP com todas as peças
+    file_3d_filename = Column(String(255), nullable=True, default="") # Arquivo 3D ou pacote .ZIP com todas as peças
+    external_url = Column(String(500), nullable=True)       # Link direto do site/personalizador original (opcional)
     files_3d_list = Column(Text, default="[]")              # Array JSON com cada arquivo 3D do projeto
     parts_count = Column(Integer, default=1)                # Quantidade de peças componentes
     file_format = Column(String(20), default="STL")
@@ -81,6 +82,7 @@ def init_db():
             ("gallery_images", "TEXT", "'[]'"),
             ("files_3d_list", "TEXT", "'[]'"),
             ("parts_count", "INTEGER", "1"),
+            ("external_url", "VARCHAR(500)", "NULL"),
         ]:
             try:
                 # Sintaxe PostgreSQL

@@ -219,7 +219,8 @@ async def create_order(
             "category_name": model.category_name,
             "price": model.price,
             "show_price": model.show_price,
-            "image_filename": model.image_filename
+            "image_filename": model.image_filename,
+            "external_url": model.external_url or ""
         }
     )
 
@@ -317,6 +318,7 @@ def get_admin_models(
             "image_filename": m.image_filename,
             "gallery_images": gallery_list,
             "file_3d_filename": m.file_3d_filename,
+            "external_url": m.external_url or "",
             "files_3d_list": files_list,
             "parts_count": m.parts_count or 1,
             "file_format": m.file_format,
@@ -339,6 +341,7 @@ async def upload_model(
     show_price: bool = Form(True),
     order_count: int = Form(15),
     is_featured: bool = Form(False),
+    external_url: Optional[str] = Form(None),
     image: UploadFile = File(...),
     files_3d: List[UploadFile] = File(default=[]),
     file_3d: Optional[UploadFile] = File(None),
@@ -346,14 +349,16 @@ async def upload_model(
     db: Session = Depends(get_db),
     admin: str = Depends(get_current_admin)
 ):
-    """Cadastro de novo modelo 3D com suporte a múltiplas peças e galeria de fotos."""
+    """Cadastro de novo modelo 3D com suporte a arquivo físico (.STL/.3MF/.ZIP) ou link de personalizador."""
+    clean_url = external_url.strip() if external_url else ""
+
     # Consolida arquivos 3D (suporta tanto files_3d múltiplos quanto file_3d único)
     all_3d_files = [f for f in files_3d if f and f.filename]
     if file_3d and file_3d.filename and file_3d not in all_3d_files:
         all_3d_files.append(file_3d)
 
-    if not all_3d_files:
-        raise HTTPException(status_code=400, detail="Pelo menos um arquivo 3D deve ser enviado.")
+    if not all_3d_files and not clean_url:
+        raise HTTPException(status_code=400, detail="Envie pelo menos um arquivo 3D ou informe o link do site/personalizador.")
 
     # Valida imagem de capa
     ext_img = Path(image.filename).suffix.lower()
@@ -385,9 +390,16 @@ async def upload_model(
                 shutil.copyfileobj(gal_file.file, f)
             saved_gallery_filenames.append(g_name)
 
-    # 3. Salva Arquivo(s) 3D
+    # 3. Salva Arquivo(s) 3D ou Registra Link Externo
     parts_metadata = []
-    if len(all_3d_files) == 1:
+    if not all_3d_files:
+        # Modelo baseado em Link Externo de Personalizador / Site
+        saved_3d_name = ""
+        file_size = 0
+        parts_count = 1
+        format_str = "LINK"
+        parts_metadata = [{"name": f"Link Externo: {clean_url}", "size": 0}]
+    elif len(all_3d_files) == 1:
         f_single = all_3d_files[0]
         ext_3d = Path(f_single.filename).suffix.lower()
         if ext_3d not in ALLOWED_3D_EXTENSIONS:
@@ -449,6 +461,7 @@ async def upload_model(
         image_filename=saved_img_name,
         gallery_images=json.dumps(saved_gallery_filenames),
         file_3d_filename=saved_3d_name,
+        external_url=clean_url if clean_url else None,
         files_3d_list=json.dumps(parts_metadata),
         parts_count=parts_count,
         file_format=format_str,
@@ -468,7 +481,8 @@ async def upload_model(
         "id": new_model.id,
         "title": new_model.title,
         "parts_count": parts_count,
-        "gallery_count": len(saved_gallery_filenames) + 1
+        "gallery_count": len(saved_gallery_filenames) + 1,
+        "external_url": new_model.external_url or ""
     }
 
 @app.delete("/api/admin/models/{model_id}")
@@ -484,13 +498,14 @@ def delete_model(
 
     # Remove arquivos físicos
     img_path = IMAGE_DIR / model.image_filename
-    file_path = MODEL_DIR / model.file_3d_filename
     if img_path.exists():
         try: img_path.unlink()
         except: pass
-    if file_path.exists():
-        try: file_path.unlink()
-        except: pass
+    if model.file_3d_filename:
+        file_path = MODEL_DIR / model.file_3d_filename
+        if file_path.exists():
+            try: file_path.unlink()
+            except: pass
 
     db.delete(model)
     db.commit()
@@ -503,7 +518,7 @@ async def update_model(
     db: Session = Depends(get_db),
     admin: str = Depends(get_current_admin)
 ):
-    """Atualiza configurações de título, descrição, categoria, preço, prova social ou destaque do modelo."""
+    """Atualiza configurações de título, descrição, categoria, preço, prova social, link externo ou destaque do modelo."""
     model = db.query(Model3D).filter(Model3D.id == model_id).first()
     if not model:
         raise HTTPException(status_code=404, detail="Modelo não encontrado.")
@@ -513,6 +528,9 @@ async def update_model(
         model.title = str(data["title"]).strip()
     if "description" in data and data["description"] is not None:
         model.description = str(data["description"]).strip()
+    if "external_url" in data:
+        raw_url = str(data["external_url"]).strip() if data["external_url"] is not None else ""
+        model.external_url = raw_url if raw_url else None
     if "category_id" in data and data["category_id"] is not None:
         cat = db.query(Category).filter(Category.id == int(data["category_id"])).first()
         if cat:
@@ -539,6 +557,7 @@ async def update_model(
         "category_id": model.category_id,
         "category_name": model.category_name,
         "price": model.price,
+        "external_url": model.external_url or "",
         "message": "Modelo atualizado com sucesso."
     }
 
@@ -549,35 +568,48 @@ def download_model_3d(
     admin: str = Depends(get_current_admin)
 ):
     """
-    DOWNLOAD SEGURO DO ARQUIVO 3D BRUTO (.STL / .3MF).
+    DOWNLOAD SEGURO DO ARQUIVO 3D BRUTO (.STL / .3MF) OU REDIRECIONAMENTO AO SITE ORIGINAL.
     Proteção estrita: Exige sessão ativa de Administrador.
     """
     model = db.query(Model3D).filter(Model3D.id == model_id).first()
     if not model:
         raise HTTPException(status_code=404, detail="Modelo não encontrado.")
 
-    target = MODEL_DIR / model.file_3d_filename
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="Arquivo 3D físico não encontrado no servidor.")
+    if model.file_3d_filename:
+        target = MODEL_DIR / model.file_3d_filename
+        if target.is_file():
+            return FileResponse(
+                target,
+                media_type="application/octet-stream",
+                filename=model.file_3d_filename
+            )
 
-    return FileResponse(
-        target,
-        media_type="application/octet-stream",
-        filename=model.file_3d_filename
-    )
+    # Se não há arquivo físico em disco, mas há link externo cadastrado, redireciona ao site
+    if model.external_url:
+        return RedirectResponse(url=model.external_url, status_code=303)
+
+    raise HTTPException(status_code=404, detail="Arquivo 3D físico não encontrado no servidor.")
 
 @app.get("/api/admin/orders")
 def get_orders(
     db: Session = Depends(get_db),
     admin: str = Depends(get_current_admin)
 ):
-    """Lista histórico de orçamentos e pedidos de clientes."""
+    """Lista histórico de orçamentos e pedidos de clientes com links de acesso."""
     orders = db.query(Order).order_by(Order.id.desc()).limit(100).all()
+    model_ids = {o.model_id for o in orders if o.model_id}
+    model_map = {}
+    if model_ids:
+        models_data = db.query(Model3D.id, Model3D.external_url, Model3D.file_3d_filename).filter(Model3D.id.in_(model_ids)).all()
+        model_map = {m[0]: {"external_url": m[1] or "", "file_3d_filename": m[2] or ""} for m in models_data}
+
     return [
         {
             "id": o.id,
             "model_id": o.model_id,
             "model_title": o.model_title,
+            "external_url": model_map.get(o.model_id, {}).get("external_url", ""),
+            "file_3d_filename": model_map.get(o.model_id, {}).get("file_3d_filename", ""),
             "price_registered": o.price_registered,
             "show_price": o.show_price,
             "customer_name": o.customer_name,
