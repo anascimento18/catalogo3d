@@ -270,6 +270,21 @@ def test_external_url_model_workflow():
     assert res_data["external_url"] == "https://makerworld.com/pt/models/123456#profileId-789"
     print(f"[OK] Cadastro por Link: Modelo {model_id} criado sem arquivo 3D local com sucesso.")
 
+    # 2b. Cadastro SOMENTE com link (SEM arquivos 3D e SEM foto de capa - capa padrão automática)
+    data_only_link = {
+        "title": "Suporte Articulado Só Link",
+        "category_id": 1,
+        "price": 45.00,
+        "show_price": True,
+        "external_url": "makerworld.com/pt/models/987654"
+    }
+    upload_only_link_res = client.post("/api/admin/models", data=data_only_link, cookies=login_res.cookies)
+    assert upload_only_link_res.status_code == 200
+    res_only_link = upload_only_link_res.json()
+    assert res_only_link["external_url"] == "https://makerworld.com/pt/models/987654"
+    print(f"[OK] Cadastro Somente Link (Zero Arquivos/Zero Fotos): Modelo {res_only_link['id']} criado com capa padrão e URL normalizada.")
+    client.delete(f"/api/admin/models/{res_only_link['id']}", cookies=login_res.cookies)
+
     # 3. Teste de download com redirecionamento para o site
     dl_res = client.get(f"/api/admin/models/{model_id}/download", cookies=login_res.cookies, follow_redirects=False)
     assert dl_res.status_code == 303

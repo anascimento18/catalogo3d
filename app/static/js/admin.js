@@ -227,7 +227,10 @@ function setupEditForm() {
     const isFeatured = document.getElementById('editModelFeatured').checked;
     const orderCount = parseInt(document.getElementById('editModelOrderCount').value || '0');
     const desc = document.getElementById('editModelDesc').value.trim();
-    const externalUrl = (document.getElementById('editModelExternalUrl')?.value || '').trim();
+    let externalUrl = (document.getElementById('editModelExternalUrl')?.value || '').trim();
+    if (externalUrl && !externalUrl.startsWith('http://') && !externalUrl.startsWith('https://')) {
+      externalUrl = 'https://' + externalUrl;
+    }
 
     btn.disabled = true;
     btn.innerHTML = `<span>Salvando alterações...</span>`;
@@ -300,6 +303,7 @@ window.switch3DSource = function(mode) {
 
   const allBtns = [btnFile, btnLink, btnBoth].filter(Boolean);
   allBtns.forEach(b => {
+    b.classList.remove('active');
     b.style.background = 'transparent';
     b.style.color = '#a1a1aa';
   });
@@ -313,6 +317,7 @@ window.switch3DSource = function(mode) {
       badge.style.background = 'rgba(56, 189, 248, 0.15)';
     }
     if (btnFile) {
+      btnFile.classList.add('active');
       btnFile.style.background = '#2563eb';
       btnFile.style.color = '#fff';
     }
@@ -325,9 +330,12 @@ window.switch3DSource = function(mode) {
       badge.style.background = 'rgba(168, 85, 247, 0.15)';
     }
     if (btnLink) {
+      btnLink.classList.add('active');
       btnLink.style.background = '#9333ea';
       btnLink.style.color = '#fff';
     }
+    const input = document.getElementById('modelExternalUrl');
+    if (input) setTimeout(() => input.focus(), 60);
   } else if (mode === 'both') {
     if (containerFile) containerFile.style.display = 'block';
     if (containerLink) containerLink.style.display = 'block';
@@ -337,12 +345,30 @@ window.switch3DSource = function(mode) {
       badge.style.background = 'rgba(52, 211, 153, 0.15)';
     }
     if (btnBoth) {
+      btnBoth.classList.add('active');
       btnBoth.style.background = '#059669';
       btnBoth.style.color = '#fff';
     }
   }
   if (window.lucide) lucide.createIcons();
 };
+
+function showUploadAlert(msg, type = 'error') {
+  const alertBox = document.getElementById('uploadAlert');
+  if (!alertBox) return;
+  alertBox.textContent = msg;
+  if (type === 'error') {
+    alertBox.style.background = 'rgba(239, 35, 60, 0.15)';
+    alertBox.style.border = '1px solid rgba(239, 35, 60, 0.3)';
+    alertBox.style.color = '#fca5a5';
+  } else {
+    alertBox.style.background = 'rgba(34, 197, 94, 0.15)';
+    alertBox.style.border = '1px solid rgba(34, 197, 94, 0.3)';
+    alertBox.style.color = '#86efac';
+  }
+  alertBox.style.display = 'block';
+  alertBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
 
 // 5. Configuração dos Dropzones com Suporte a Múltiplos Arquivos e Galeria
 function setupDropzones() {
@@ -527,19 +553,32 @@ function setupUploadForm() {
     e.preventDefault();
     alertBox.style.display = 'none';
 
-    const externalUrl = (document.getElementById('modelExternalUrl')?.value || '').trim();
+    const title = (document.getElementById('modelTitle')?.value || '').trim();
+    if (!title) {
+      showUploadAlert('Por favor, informe o título do modelo.', 'error');
+      document.getElementById('modelTitle')?.focus();
+      return;
+    }
+
+    let externalUrl = (document.getElementById('modelExternalUrl')?.value || '').trim();
+    if (externalUrl && !externalUrl.startsWith('http://') && !externalUrl.startsWith('https://')) {
+      externalUrl = 'https://' + externalUrl;
+      const inputEl = document.getElementById('modelExternalUrl');
+      if (inputEl) inputEl.value = externalUrl;
+    }
     const hasFiles = selectedFiles3D && selectedFiles3D.length > 0;
 
     if (!hasFiles && !externalUrl) {
-      alert('Por favor, selecione pelo menos um arquivo 3D (.STL, .3MF, .ZIP) OU insira o link do site/personalizador.');
-      return;
-    }
-    if (!selectedFileImg) {
-      alert('Por favor, selecione a foto de capa principal do modelo.');
+      showUploadAlert('Por favor, selecione pelo menos um arquivo 3D (.STL, .3MF, .ZIP) OU insira o link do site/personalizador.', 'error');
       return;
     }
 
-    const title = document.getElementById('modelTitle').value.trim();
+    // Se não informou link e nem selecionou foto, exige foto
+    if (!selectedFileImg && !externalUrl) {
+      showUploadAlert('Por favor, selecione a foto de capa principal do modelo.', 'error');
+      return;
+    }
+
     const categoryId = document.getElementById('modelCategory').value;
     const price = parseFloat(document.getElementById('modelPrice').value || '0');
     const showPrice = document.getElementById('modelShowPrice').checked;
@@ -565,8 +604,10 @@ function setupUploadForm() {
       formData.append('files_3d', f);
     });
 
-    // Foto de Capa (Primária)
-    formData.append('image', selectedFileImg);
+    // Foto de Capa (Primária - se fornecida)
+    if (selectedFileImg) {
+      formData.append('image', selectedFileImg);
+    }
 
     // Fotos Adicionais da Galeria
     selectedGalleryImgs.forEach(f => {
@@ -586,11 +627,7 @@ function setupUploadForm() {
       const partsMsg = data.parts_count > 1 ? ` (${data.parts_count} peças compactadas)` : '';
       const galMsg = data.gallery_count > 1 ? ` com ${data.gallery_count} fotos na galeria` : '';
       const linkMsg = externalUrl ? ' com link do site salvo' : '';
-      alertBox.textContent = `Modelo "${title}" cadastrado com sucesso!${partsMsg}${galMsg}${linkMsg}`;
-      alertBox.style.background = 'rgba(34, 197, 94, 0.15)';
-      alertBox.style.border = '1px solid rgba(34, 197, 94, 0.3)';
-      alertBox.style.color = '#86efac';
-      alertBox.style.display = 'block';
+      showUploadAlert(`Modelo "${title}" cadastrado com sucesso!${partsMsg}${galMsg}${linkMsg}`, 'success');
 
       form.reset();
       selectedFiles3D = [];
@@ -615,11 +652,7 @@ function setupUploadForm() {
       }, 1200);
 
     } catch (err) {
-      alertBox.textContent = `Erro ao salvar: ${err.message}`;
-      alertBox.style.background = 'rgba(239, 35, 60, 0.15)';
-      alertBox.style.border = '1px solid rgba(239, 35, 60, 0.3)';
-      alertBox.style.color = '#fca5a5';
-      alertBox.style.display = 'block';
+      showUploadAlert(`Erro ao salvar: ${err.message}`, 'error');
     } finally {
       btn.disabled = false;
       btn.innerHTML = `<i data-lucide="upload-cloud" style="width: 18px; height: 18px;"></i><span>Salvar e Publicar Modelo</span>`;

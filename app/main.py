@@ -168,6 +168,9 @@ def get_image(filename: str):
     safe_name = Path(filename).name
     file_path = IMAGE_DIR / safe_name
     if not file_path.is_file():
+        fallback_path = STATIC_DIR / "img" / safe_name
+        if fallback_path.is_file():
+            return FileResponse(fallback_path)
         raise HTTPException(status_code=404, detail="Imagem não encontrada.")
     return FileResponse(file_path)
 
@@ -342,7 +345,7 @@ async def upload_model(
     order_count: int = Form(15),
     is_featured: bool = Form(False),
     external_url: Optional[str] = Form(None),
-    image: UploadFile = File(...),
+    image: Optional[UploadFile] = File(None),
     files_3d: List[UploadFile] = File(default=[]),
     file_3d: Optional[UploadFile] = File(None),
     gallery_images: List[UploadFile] = File(default=[]),
@@ -351,6 +354,8 @@ async def upload_model(
 ):
     """Cadastro de novo modelo 3D com suporte a arquivo físico (.STL/.3MF/.ZIP) ou link de personalizador."""
     clean_url = external_url.strip() if external_url else ""
+    if clean_url and not clean_url.startswith("http://") and not clean_url.startswith("https://"):
+        clean_url = "https://" + clean_url
 
     # Consolida arquivos 3D (suporta tanto files_3d múltiplos quanto file_3d único)
     all_3d_files = [f for f in files_3d if f and f.filename]
@@ -360,11 +365,6 @@ async def upload_model(
     if not all_3d_files and not clean_url:
         raise HTTPException(status_code=400, detail="Envie pelo menos um arquivo 3D ou informe o link do site/personalizador.")
 
-    # Valida imagem de capa
-    ext_img = Path(image.filename).suffix.lower()
-    if ext_img not in ALLOWED_IMG_EXTENSIONS:
-        raise HTTPException(status_code=400, detail=f"Extensão de imagem principal não suportada ({ext_img}).")
-
     category = db.query(Category).filter(Category.id == category_id).first()
     category_name = category.name if category else "Geral"
 
@@ -372,10 +372,17 @@ async def upload_model(
     clean_title = "".join(c for c in title if c.isalnum() or c in ("-", "_", " ")).strip().replace(" ", "_")
 
     # 1. Salva Foto de Capa (Primária)
-    saved_img_name = f"{clean_title}_{unique_id}_cover{ext_img}"
-    target_img = IMAGE_DIR / saved_img_name
-    with open(target_img, "wb") as f:
-        shutil.copyfileobj(image.file, f)
+    if image and image.filename:
+        ext_img = Path(image.filename).suffix.lower()
+        if ext_img not in ALLOWED_IMG_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Extensão de imagem principal não suportada ({ext_img}).")
+        saved_img_name = f"{clean_title}_{unique_id}_cover{ext_img}"
+        target_img = IMAGE_DIR / saved_img_name
+        with open(target_img, "wb") as f:
+            shutil.copyfileobj(image.file, f)
+    else:
+        # Se não enviou imagem de capa, utiliza a imagem padrão Studio 3D
+        saved_img_name = "default_3d_cover.png"
 
     # 2. Salva Fotos Secundárias da Galeria
     saved_gallery_filenames = []
