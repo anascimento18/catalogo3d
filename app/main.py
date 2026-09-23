@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+import asyncio
 from app.config import (
     IMAGE_DIR,
     MODEL_DIR,
@@ -21,7 +22,9 @@ from app.config import (
     ALLOWED_3D_EXTENSIONS,
     ALLOWED_IMG_EXTENSIONS,
     BASE_DIR,
-    CATALOG_DOMAIN
+    CATALOG_DOMAIN,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_ADMIN_CHAT_ID
 )
 from app.database import init_db, get_db, Model3D, Category, Order, AdminUser
 from app.security import (
@@ -34,19 +37,34 @@ from app.security import (
     reset_failed_attempts
 )
 from app.notifier import send_order_notification
-from app.telegram_bot import process_telegram_update, setup_telegram_webhook
+from app.telegram_bot import process_telegram_update, setup_telegram_webhook, telegram_webhook_watchdog
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
+STATIC_DIR = BASE_DIR / "app" / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Inicializa banco de dados e seeds
     init_db()
-    # Registra webhook do Telegram automaticamente se o token estiver configurado
+
+    # Garante que a capa padrão esteja disponível no IMAGE_DIR
+    default_cover_target = IMAGE_DIR / "default_3d_cover.png"
+    default_cover_static = STATIC_DIR / "img" / "default_3d_cover.png"
+    if not default_cover_target.exists() and default_cover_static.exists():
+        try:
+            shutil.copy(default_cover_static, default_cover_target)
+        except Exception:
+            pass
+
+    # Inicia o Watchdog do Webhook do Telegram em background (auto-recuperação permanente)
+    watchdog_task = None
     if TELEGRAM_BOT_TOKEN:
-        await setup_telegram_webhook(TELEGRAM_BOT_TOKEN, CATALOG_DOMAIN)
+        watchdog_task = asyncio.create_task(
+            telegram_webhook_watchdog(TELEGRAM_BOT_TOKEN, CATALOG_DOMAIN, interval_seconds=180)
+        )
     yield
+    if watchdog_task:
+        watchdog_task.cancel()
+
 
 app = FastAPI(
     title="Catálogo & Portfólio 3D",
@@ -65,7 +83,6 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 # Monta arquivos estáticos
-STATIC_DIR = BASE_DIR / "app" / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ==========================================

@@ -4,6 +4,7 @@ import uuid
 import shutil
 import zipfile
 import logging
+import asyncio
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import httpx
@@ -16,7 +17,9 @@ from app.config import (
     ALLOWED_3D_EXTENSIONS,
     ALLOWED_IMG_EXTENSIONS,
     CATALOG_DOMAIN,
-    ADMIN_PASSWORD
+    ADMIN_PASSWORD,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_ADMIN_CHAT_ID
 )
 from app.database import SessionLocal, Model3D, Category
 
@@ -30,12 +33,38 @@ TEMP_TG_DIR.mkdir(parents=True, exist_ok=True)
 # { chat_id: { "step": "...", "files_3d": [], "cover_img": ..., "gallery_imgs": [], ... } }
 USER_WIZARDS: Dict[int, Dict[str, Any]] = {}
 
-# Sessões autorizadas dinamicamente
-AUTHORIZED_CHATS = set()
+# Sessões autorizadas persistentes em disco
+AUTH_FILE = DATA_DIR / "authorized_telegram_users.json"
+
+def _load_authorized_chats() -> set:
+    s = {"613898449"}
+    if AUTH_FILE.exists():
+        try:
+            with open(AUTH_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    s.update(str(x) for x in data)
+        except Exception as e:
+            logger.warning(f"Erro ao carregar {AUTH_FILE}: {e}")
+    return s
+
+def _save_authorized_chat(chat_id: str):
+    AUTHORIZED_CHATS.add(str(chat_id))
+    try:
+        with open(AUTH_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(AUTHORIZED_CHATS), f, indent=2)
+    except Exception as e:
+        logger.error(f"Erro ao salvar {AUTH_FILE}: {e}")
+
+AUTHORIZED_CHATS = _load_authorized_chats()
 
 
 def is_authorized(user_id: str, chat_id: str, admin_chat_id: Optional[str]) -> bool:
     """Verifica se o usuário ou chat tem permissão para usar o bot."""
+    global AUTHORIZED_CHATS
+    if not AUTHORIZED_CHATS:
+        AUTHORIZED_CHATS = _load_authorized_chats()
+
     if str(user_id) in AUTHORIZED_CHATS or str(chat_id) in AUTHORIZED_CHATS:
         return True
     if admin_chat_id:
@@ -43,6 +72,42 @@ def is_authorized(user_id: str, chat_id: str, admin_chat_id: Optional[str]) -> b
         if str(user_id) in allowed or str(chat_id) in allowed:
             return True
     return False
+
+
+async def telegram_webhook_watchdog(bot_token: str, base_domain: str, interval_seconds: int = 180):
+    """
+    Guardião resiliente (Watchdog) que garante que o webhook do Telegram NUNCA caia.
+    Verifica a cada X segundos se o webhook continua ativo no Telegram.
+    Se detectar queda, reinício ou remoção externa (ex: getUpdates acidental),
+    reconecta automaticamente em tempo real!
+    """
+    if not bot_token or not base_domain:
+        return
+    webhook_url = f"{base_domain.rstrip('/')}/api/telegram/webhook"
+
+    # 1. Configuração inicial imediata
+    await setup_telegram_webhook(bot_token, base_domain)
+
+    # 2. Loop de vigilância contínua
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(f"https://api.telegram.org/bot{bot_token}/getWebhookInfo")
+                if res.status_code == 200:
+                    info = res.json().get("result", {})
+                    curr_url = info.get("url", "")
+                    if curr_url != webhook_url:
+                        logger.warning(
+                            f"[TELEGRAM WATCHDOG] Webhook estava desconectado ou vazio (url={curr_url!r}). "
+                            f"Restaurando automaticamente para {webhook_url}..."
+                        )
+                        await setup_telegram_webhook(bot_token, base_domain)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"[TELEGRAM WATCHDOG] Erro temporário ao checar webhook: {e}")
+
 
 
 async def setup_telegram_webhook(bot_token: str, base_domain: str):
@@ -196,8 +261,8 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
         message_id = message.get("message_id") if message else None
         parts = text.split(maxsplit=1)
         if len(parts) >= 2 and parts[1].strip() == ADMIN_PASSWORD:
-            AUTHORIZED_CHATS.add(str(user_id))
-            AUTHORIZED_CHATS.add(str(chat_id))
+            _save_authorized_chat(str(user_id))
+            _save_authorized_chat(str(chat_id))
             await send_telegram_reply(
                 bot_token, chat_id,
                 f"🔓 *Autorizado com Sucesso!*\n\n"

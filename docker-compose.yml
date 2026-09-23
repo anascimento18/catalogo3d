@@ -44,7 +44,7 @@ services:
       
       # Ingestão Automática via Telegram Bot
       - TELEGRAM_BOT_TOKEN=8856055764:AAF5PxZzZ6y9GHgCGr-t6apEtQkPKFDfGsM
-      - TELEGRAM_ADMIN_CHAT_ID=5370959021438146805
+      - TELEGRAM_ADMIN_CHAT_ID=613898449,5370959021438146805
       
       # Performance e Logs em Tempo Real
       - PYTHONUNBUFFERED=1

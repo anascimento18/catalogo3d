@@ -28,6 +28,11 @@ EVOLUTION_KEY = os.getenv("EVOLUTION_KEY", "4eddc4b3-5499-47a1-9b8b-d4afa9ad00e8
 EVOLUTION_INSTANCE = os.getenv("EVOLUTION_INSTANCE", "default")
 CATALOG_DOMAIN = os.getenv("CATALOG_DOMAIN", "https://catalogo3d.3afieldservice.com.br")
 
+# Ingestão Automática via Telegram Bot
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8856055764:AAF5PxZzZ6y9GHgCGr-t6apEtQkPKFDfGsM")
+TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "613898449,5370959021438146805")
+
 # Formatos suportados
 ALLOWED_3D_EXTENSIONS = {".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs", ".fbx", ".gltf", ".glb", ".blend", ".scad", ".zip", ".rar", ".7z"}
 ALLOWED_IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
