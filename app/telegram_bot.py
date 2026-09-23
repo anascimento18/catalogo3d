@@ -489,71 +489,169 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             "path": target_cover
         }
 
-        # Avança direto para o título! Se tiver só 1 foto, basta digitar o nome. Se tiver mais, pode enviar mais fotos!
-        wizard["step"] = "WAIT_TITLE"
+        # Pergunta explicitamente se tem mais fotos ou se quer avançar
+        wizard["step"] = "ASK_MORE_PHOTOS"
+
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "📸 Sim, Enviar Mais Fotos", "callback_data": "more_photos_yes"},
+                    {"text": "➡️ Não, Avançar para Título", "callback_data": "more_photos_no"}
+                ]
+            ]
+        }
 
         await send_telegram_reply(
             bot_token, chat_id,
             f"✅ *Foto de Capa recebida com sucesso!*\n\n"
-            f"---\n"
-            f"📝 *Passo 3 de 5: Título do Modelo*\n"
-            f"Digite o nome da peça (ex: _Casinhas Pinha Natal_):\n\n"
-            f"💡 _Se tiver mais fotos para a vitrine, pode enviar outra foto agora mesmo!_"
+            f"📸 *Deseja adicionar mais fotos deste modelo para a vitrine?*",
+            reply_markup=keyboard
         )
         return {"ok": True}
 
     # =========================================================================
-    # Compatibilidade com sessões anteriores em WAIT_GALLERY
+    # PASSO 2.1: Pergunta se tem mais fotos ou avança para o Título
     # =========================================================================
-    if step == "WAIT_GALLERY":
-        wizard["step"] = "WAIT_TITLE"
-        step = "WAIT_TITLE"
+    if step == "ASK_MORE_PHOTOS":
+        # Se escolheu NÃO adicionar mais fotos (botão ou comando texto)
+        if callback_data == "more_photos_no" or text.lower() in ("não", "nao", "n", "pular", "/pular", "concluir", "/concluir", "avancar", "avançar", "nao tenho", "não tenho", "pronto", "ok"):
+            wizard["step"] = "WAIT_TITLE"
+            total_photos = 1 + len(wizard["gallery_imgs"])
+            await send_telegram_reply(
+                bot_token, chat_id,
+                f"✅ *Fotos registradas:* {total_photos} foto(s) no total.\n\n"
+                f"---\n"
+                f"📝 *Passo 3 de 5: Título do Modelo*\n"
+                f"Digite o nome da peça (ex: _Casinhas Pinha Natal_):"
+            )
+            return {"ok": True}
 
-    # =========================================================================
-    # PASSO 3: Aguardando Título (ou Fotos Extras da Galeria)
-    # =========================================================================
-    if step == "WAIT_TITLE":
-        # Se o usuário enviou outra foto em vez de texto, adiciona à galeria!
+        # Se escolheu SIM, enviar mais fotos (botão ou comando texto)
+        if callback_data == "more_photos_yes" or text.lower() in ("sim", "s", "mais", "mais fotos", "quero"):
+            wizard["step"] = "WAIT_GALLERY_PHOTO"
+            await send_telegram_reply(
+                bot_token, chat_id,
+                "📸 *Envie agora a próxima foto* do modelo para a galeria:"
+            )
+            return {"ok": True}
+
+        # Se enviou uma foto diretamente sem clicar no botão
         extra_file_id = None
         extra_orig_name = f"gal_{len(wizard['gallery_imgs'])+1}.jpg"
-
         if photos:
             extra_file_id = photos[-1].get("file_id")
-        elif document:
-            doc_ext = Path(document.get("file_name", "")).suffix.lower()
-            if doc_ext in ALLOWED_IMG_EXTENSIONS:
-                extra_file_id = document.get("file_id")
-                extra_orig_name = document.get("file_name")
+        elif document and Path(document.get("file_name", "")).suffix.lower() in ALLOWED_IMG_EXTENSIONS:
+            extra_file_id = document.get("file_id")
+            extra_orig_name = document.get("file_name")
 
         if extra_file_id:
             await send_telegram_reply(bot_token, chat_id, "⏳ Baixando foto adicional...")
             target_gal = wizard["temp_dir"] / extra_orig_name
             success, err_msg = await download_telegram_file(bot_token, extra_file_id, target_gal)
             if success:
-                wizard["gallery_imgs"].append({
-                    "name": extra_orig_name,
-                    "path": target_gal
-                })
+                wizard["gallery_imgs"].append({"name": extra_orig_name, "path": target_gal})
                 count = len(wizard["gallery_imgs"])
                 total_all = 1 + count
+                keyboard = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "📸 Sim, Enviar Mais Fotos", "callback_data": "more_photos_yes"},
+                            {"text": f"➡️ Não, Avançar para Título ({total_all} fotos)", "callback_data": "more_photos_no"}
+                        ]
+                    ]
+                }
                 await send_telegram_reply(
                     bot_token, chat_id,
-                    f"📸 *Foto extra #{count} adicionada!* (Total: {total_all} fotos cadastradas).\n\n"
-                    f"📝 Digite agora o **Título do modelo** (ou envie mais uma foto se desejar):"
+                    f"✅ *Foto extra #{count} adicionada!* (Total: {total_all} fotos cadastradas).\n\n"
+                    f"📸 *Deseja adicionar mais alguma foto?*",
+                    reply_markup=keyboard
+                )
+                return {"ok": True}
+
+        # Se digitou algo ou texto, re-exibe as opções
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "📸 Sim, Enviar Mais Fotos", "callback_data": "more_photos_yes"},
+                    {"text": "➡️ Não, Avançar para Título", "callback_data": "more_photos_no"}
+                ]
+            ]
+        }
+        await send_telegram_reply(
+            bot_token, chat_id,
+            "💡 *Deseja adicionar mais fotos deste modelo?*\nEscolha uma das opções abaixo:",
+            reply_markup=keyboard
+        )
+        return {"ok": True}
+
+    # =========================================================================
+    # PASSO 2.2: Aguardando envio da foto adicional
+    # =========================================================================
+    if step in ("WAIT_GALLERY_PHOTO", "WAIT_GALLERY"):
+        # Se desistir e quiser avançar
+        if callback_data in ("more_photos_no", "gallery_done") or text.lower() in ("não", "nao", "n", "pular", "/pular", "concluir", "/concluir", "chega", "avançar", "avancar"):
+            wizard["step"] = "WAIT_TITLE"
+            total_photos = 1 + len(wizard["gallery_imgs"])
+            await send_telegram_reply(
+                bot_token, chat_id,
+                f"✅ *Fotos registradas:* {total_photos} foto(s) no total.\n\n"
+                f"---\n"
+                f"📝 *Passo 3 de 5: Título do Modelo*\n"
+                f"Digite o nome da peça (ex: _Casinhas Pinha Natal_):"
+            )
+            return {"ok": True}
+
+        extra_file_id = None
+        extra_orig_name = f"gal_{len(wizard['gallery_imgs'])+1}.jpg"
+        if photos:
+            extra_file_id = photos[-1].get("file_id")
+        elif document and Path(document.get("file_name", "")).suffix.lower() in ALLOWED_IMG_EXTENSIONS:
+            extra_file_id = document.get("file_id")
+            extra_orig_name = document.get("file_name")
+
+        if extra_file_id:
+            await send_telegram_reply(bot_token, chat_id, "⏳ Baixando foto adicional...")
+            target_gal = wizard["temp_dir"] / extra_orig_name
+            success, err_msg = await download_telegram_file(bot_token, extra_file_id, target_gal)
+            if success:
+                wizard["gallery_imgs"].append({"name": extra_orig_name, "path": target_gal})
+                count = len(wizard["gallery_imgs"])
+                total_all = 1 + count
+                wizard["step"] = "ASK_MORE_PHOTOS"
+                keyboard = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "📸 Sim, Enviar Mais Fotos", "callback_data": "more_photos_yes"},
+                            {"text": f"➡️ Não, Avançar para Título ({total_all} fotos)", "callback_data": "more_photos_no"}
+                        ]
+                    ]
+                }
+                await send_telegram_reply(
+                    bot_token, chat_id,
+                    f"✅ *Foto extra #{count} adicionada!* (Total: {total_all} fotos cadastradas).\n\n"
+                    f"📸 *Deseja adicionar mais alguma foto?*",
+                    reply_markup=keyboard
                 )
                 return {"ok": True}
             else:
                 await send_telegram_reply(
                     bot_token, chat_id,
-                    f"⚠️ Falha ao baixar foto adicional: {err_msg}. Digite o título do modelo para continuar:"
+                    f"⚠️ Falha ao baixar imagem: {err_msg}. Tente enviar novamente ou avance:",
+                    reply_markup={"inline_keyboard": [[{"text": "➡️ Avançar para Título", "callback_data": "more_photos_no"}]]}
                 )
                 return {"ok": True}
 
-        # Se clicou em algum callback antigo de galeria
-        if callback_data == "gallery_done":
-            await send_telegram_reply(bot_token, chat_id, "📝 Digite o título do modelo:")
-            return {"ok": True}
+        await send_telegram_reply(
+            bot_token, chat_id,
+            "📸 *Por favor, envie a foto da peça*, ou clique no botão abaixo para avançar:",
+            reply_markup={"inline_keyboard": [[{"text": "➡️ Não Tenho Mais Fotos (Avançar)", "callback_data": "more_photos_no"}]]}
+        )
+        return {"ok": True}
 
+    # =========================================================================
+    # PASSO 3: Aguardando Título
+    # =========================================================================
+    if step == "WAIT_TITLE":
         if not text:
             await send_telegram_reply(bot_token, chat_id, "⚠️ Digite o título do modelo:")
             return {"ok": True}
