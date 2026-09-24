@@ -34,6 +34,11 @@ TELEGRAM_ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "613898449,53709590
 TELEGRAM_API_SERVER = os.getenv("TELEGRAM_API_SERVER", "https://api.telegram.org").rstrip("/")
 TELEGRAM_LOCAL_DIR = Path(os.getenv("TELEGRAM_LOCAL_DIR", "/var/lib/telegram-bot-api"))
 
+# Agente de Inteligência Artificial MiniMax (MiniMax-M3 com Visão e Raciocínio)
+MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "sk-api-1CUOAQ5tpIX1IKwwWsilaQC-BTotoF3KHMLI6KoijLkZRM-2dVcANiaVyYepXzmU1Uj5zWnBckS0nSfh17oiqwQ7Ew0OSYrVCKIcsQQKs7euvXxK5_KhVRA")
+MINIMAX_API_URL = os.getenv("MINIMAX_API_URL", "https://api.minimaxi.chat/v1/chat/completions")
+MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "MiniMax-M3")
+
 
 # Formatos suportados
 ALLOWED_3D_EXTENSIONS = {".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs", ".fbx", ".gltf", ".glb", ".blend", ".scad", ".zip", ".rar", ".7z"}

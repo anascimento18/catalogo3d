@@ -326,6 +326,12 @@ if __name__ == "__main__":
     test_delete_and_clear_orders()
     test_external_url_model_workflow()
     test_telegram_wizard_auth()
+
+    # Teste do Agente IA MiniMax no Telegram Bot
+    from test_ai_bot_flow import test_full_ai_bot_workflow
+    import asyncio
+    asyncio.run(test_full_ai_bot_workflow())
+
     print("\nTODOS OS TESTES DE SEGURANÇA E FUNCIONALIDADES PASSARAM COM SUCESSO!")
 
 

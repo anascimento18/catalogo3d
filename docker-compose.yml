@@ -47,6 +47,10 @@ services:
       - TELEGRAM_BOT_TOKEN=8856055764:AAF5PxZzZ6y9GHgCGr-t6apEtQkPKFDfGsM
       - TELEGRAM_ADMIN_CHAT_ID=613898449,5370959021438146805
       - TELEGRAM_API_SERVER=http://telegram-bot-api:8081
+
+      # Agente Inteligente MiniMax (Visão + Raciocínio + Precificação)
+      - MINIMAX_API_KEY=sk-api-1CUOAQ5tpIX1IKwwWsilaQC-BTotoF3KHMLI6KoijLkZRM-2dVcANiaVyYepXzmU1Uj5zWnBckS0nSfh17oiqwQ7Ew0OSYrVCKIcsQQKs7euvXxK5_KhVRA
+      - MINIMAX_MODEL=MiniMax-M3
       
       # Performance e Logs em Tempo Real
       - PYTHONUNBUFFERED=1

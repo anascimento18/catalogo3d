@@ -24,6 +24,7 @@ from app.config import (
     TELEGRAM_LOCAL_DIR
 )
 from app.database import SessionLocal, Model3D, Category
+from app.ai_agent import analyze_model_proposal
 
 logger = logging.getLogger("telegram_bot")
 
@@ -31,7 +32,7 @@ logger = logging.getLogger("telegram_bot")
 TEMP_TG_DIR = DATA_DIR / "temp_telegram"
 TEMP_TG_DIR.mkdir(parents=True, exist_ok=True)
 
-# Estado das conversas dos usuários (FSM)
+# Estado das conversas dos usuários
 # { chat_id: { "step": "...", "files_3d": [], "cover_img": ..., "gallery_imgs": [], ... } }
 USER_WIZARDS: Dict[int, Dict[str, Any]] = {}
 
@@ -80,8 +81,7 @@ async def telegram_webhook_watchdog(bot_token: str, base_domain: str, interval_s
     """
     Guardião resiliente (Watchdog) que garante que o webhook do Telegram NUNCA caia.
     Verifica a cada X segundos se o webhook continua ativo no Telegram.
-    Se detectar queda, reinício ou remoção externa (ex: getUpdates acidental),
-    reconecta automaticamente em tempo real!
+    Se detectar queda, reinício ou remoção externa, reconecta automaticamente!
     """
     if not bot_token or not base_domain:
         return
@@ -101,15 +101,14 @@ async def telegram_webhook_watchdog(bot_token: str, base_domain: str, interval_s
                     curr_url = info.get("url", "")
                     if curr_url != webhook_url:
                         logger.warning(
-                            f"[TELEGRAM WATCHDOG] Webhook estava desconectado ou vazio (url={curr_url!r}). "
-                            f"Restaurando automaticamente para {webhook_url}..."
+                            f"[TELEGRAM WATCHDOG] Webhook estava desconectado (url={curr_url!r}). "
+                            f"Restaurando para {webhook_url}..."
                         )
                         await setup_telegram_webhook(bot_token, base_domain)
         except asyncio.CancelledError:
             break
         except Exception as e:
             logger.warning(f"[TELEGRAM WATCHDOG] Erro temporário ao checar webhook: {e}")
-
 
 
 async def setup_telegram_webhook(bot_token: str, base_domain: str):
@@ -154,7 +153,6 @@ async def send_telegram_reply(bot_token: str, chat_id: int, text: str, reply_mar
                 f"{TELEGRAM_API_SERVER}/bot{bot_token}/sendMessage",
                 json=payload
             )
-            # Se o Telegram rejeitar devido a caracteres especiais de Markdown (ex: underscore em comandos ou nomes de arquivos)
             if res.status_code != 200 or not res.json().get("ok"):
                 logger.warning(f"Aviso ao enviar markdown ({res.text}). Reenviando em texto plano...")
                 plain_payload = {
@@ -190,7 +188,6 @@ async def download_telegram_file(bot_token: str, file_id: str, dest_path: Path) 
     """
     Baixa um arquivo do Telegram para o disco local com suporte a API local (cópia direta instantânea)
     ou streaming em chunks (suporte a arquivos gigantes até 2 GB).
-    Retorna (sucesso, mensagem_ou_erro).
     """
     try:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,7 +204,7 @@ async def download_telegram_file(bot_token: str, file_id: str, dest_path: Path) 
             if not file_path_on_tg:
                 return False, "Caminho do arquivo não fornecido pelo Telegram"
 
-            # 1. Se o servidor local do Telegram estiver em volume compartilhado, copia diretamente sem tráfego de rede!
+            # 1. Se o servidor local do Telegram estiver em volume compartilhado, copia diretamente
             local_direct_path = Path(file_path_on_tg)
             if local_direct_path.is_file():
                 shutil.copyfile(local_direct_path, dest_path)
@@ -218,7 +215,7 @@ async def download_telegram_file(bot_token: str, file_id: str, dest_path: Path) 
                 shutil.copyfile(shared_vol_path, dest_path)
                 return True, "Sucesso"
 
-            # 2. Caso contrário, faz stream via HTTP pelo servidor da Bot API
+            # 2. Caso contrário, faz stream via HTTP
             download_url = f"{TELEGRAM_API_SERVER}/file/bot{bot_token}/{file_path_on_tg}"
             async with client.stream("GET", download_url) as file_res:
                 if file_res.status_code != 200:
@@ -235,12 +232,270 @@ async def download_telegram_file(bot_token: str, file_id: str, dest_path: Path) 
         return False, str(e)
 
 
-# Cache de updates processados para deduplicação instantânea (evita retentativas do Telegram)
+# Cache de updates processados para deduplicação instantânea
 PROCESSED_UPDATES = set()
 PROCESSED_QUEUE = []
 
-# Locks por chat para garantir processamento estritamente sequencial sem concorrência
+# Locks por chat para garantir processamento estritamente sequencial
 CHAT_LOCKS: Dict[int, asyncio.Lock] = {}
+
+
+def _get_or_create_wizard(chat_id: int) -> dict:
+    """Retorna o rascunho ativo ou inicializa um novo."""
+    if chat_id not in USER_WIZARDS:
+        session_id = uuid.uuid4().hex[:6]
+        user_temp_dir = TEMP_TG_DIR / f"{chat_id}_{session_id}"
+        user_temp_dir.mkdir(parents=True, exist_ok=True)
+        USER_WIZARDS[chat_id] = {
+            "session_id": session_id,
+            "temp_dir": user_temp_dir,
+            "step": "WAIT_INPUT",
+            "files_3d": [],
+            "external_url": None,
+            "cover_img": None,
+            "gallery_imgs": [],
+            "title": "",
+            "category_id": 1,
+            "category_name": "Decoração & Casa",
+            "price": 0.0,
+            "show_price": True,
+            "price_range": "",
+            "reasoning": "",
+            "is_featured": False,
+            "order_count": 18,
+            "description": ""
+        }
+    return USER_WIZARDS[chat_id]
+
+
+async def send_proposal_card(bot_token: str, chat_id: int, wizard: dict):
+    """Envia o Card Interativo de Proposta Inteligente gerado pela IA."""
+    price_val = wizard.get("price", 0.0)
+    show_price = wizard.get("show_price", True)
+    price_display = f"R$ {price_val:.2f}" if (show_price and price_val > 0) else "Sob Consulta"
+    price_range = wizard.get("price_range", "")
+    range_info = f" _(Faixa de mercado: {price_range})_" if price_range else ""
+
+    total_3d = len(wizard.get("files_3d", []))
+    if not wizard.get("files_3d") and wizard.get("external_url"):
+        origin_str = f"🔗 Link: `{wizard['external_url']}`"
+    elif total_3d == 1:
+        f = wizard["files_3d"][0]
+        size_mb = f.get("size", 0) / (1024 * 1024)
+        origin_str = f"`{f['name']}` ({size_mb:.1f} MB)"
+    else:
+        origin_str = f"{total_3d} arquivos 3D agrupados"
+
+    photos_count = 1 + len(wizard.get("gallery_imgs", []))
+
+    card_text = (
+        f"✨ *Proposta Inteligente de Publicação* 🤖\n\n"
+        f"🏷️ *Título Comercial:* {wizard['title']}\n"
+        f"📂 *Categoria:* {wizard['category_name']}\n"
+        f"💰 *Preço Sugerido:* *{price_display}*{range_info}\n"
+        f"📁 *Arquivo 3D:* {origin_str}\n"
+        f"🖼️ *Fotos da Vitrine:* {photos_count} foto(s)\n\n"
+        f"📝 *Descrição de Venda:*\n"
+        f"_{wizard['description']}_\n\n"
+        f"💡 *Análise da IA MiniMax:*\n"
+        f"_{wizard.get('reasoning', 'Preço e título otimizados com base em tendências de impressão 3D no Brasil.')}_\n\n"
+        f"👇 _Aprove em 1 clique ou personalize o que desejar:_"
+    )
+
+    approve_label = f"✅ Aprovar e Publicar ({price_display})" if show_price and price_val > 0 else "✅ Aprovar e Publicar"
+
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": approve_label, "callback_data": "ai_approve_price"},
+                {"text": "💬 Publicar Sob Consulta", "callback_data": "ai_approve_quote"}
+            ],
+            [
+                {"text": "🏷️ Alterar Categoria", "callback_data": "ai_change_cat"},
+                {"text": "💰 Alterar Valor", "callback_data": "ai_change_price"}
+            ],
+            [
+                {"text": "📝 Alterar Título", "callback_data": "ai_change_title"},
+                {"text": "📸 + Adicionar Fotos", "callback_data": "ai_add_photos"}
+            ],
+            [
+                {"text": "❌ Cancelar", "callback_data": "ai_cancel"}
+            ]
+        ]
+    }
+
+    await send_telegram_reply(bot_token, chat_id, card_text, reply_markup=keyboard)
+
+
+async def trigger_ai_proposal(bot_token: str, chat_id: int, wizard: dict, caption: str = ""):
+    """Executa a análise de IA via MiniMax e exibe o card interativo de proposta."""
+    has_3d = bool(wizard.get("files_3d") or wizard.get("external_url"))
+    has_cover = bool(wizard.get("cover_img"))
+
+    if not has_3d or not has_cover:
+        return
+
+    await send_telegram_reply(
+        bot_token, chat_id,
+        "🤖 *Analisando peça com IA e pesquisando referências de mercado no Brasil...* 🔍"
+    )
+
+    db = SessionLocal()
+    categories_names = []
+    try:
+        categories_db = db.query(Category).all()
+        categories_names = [c.name for c in categories_db]
+    finally:
+        db.close()
+
+    # Identifica nome principal
+    if wizard.get("files_3d"):
+        main_filename = wizard["files_3d"][0]["name"]
+    else:
+        main_filename = wizard.get("external_url") or "modelo.stl"
+
+    cover_path = wizard["cover_img"]["path"] if wizard.get("cover_img") else None
+
+    # Chama IA MiniMax
+    ai_result = await analyze_model_proposal(
+        image_path=cover_path,
+        filename=main_filename,
+        caption=caption,
+        external_url=wizard.get("external_url"),
+        categories=categories_names
+    )
+
+    wizard["title"] = ai_result.get("title", "Modelo Decorativo 3D")
+    wizard["category_name"] = ai_result.get("category", "Decoração & Casa")
+    wizard["description"] = ai_result.get("description", "")
+    wizard["price"] = float(ai_result.get("suggested_price", 45.0))
+    wizard["show_price"] = True
+    wizard["price_range"] = ai_result.get("price_range", "")
+    wizard["reasoning"] = ai_result.get("reasoning", "")
+    wizard["step"] = "PROPOSAL"
+
+    # Mapeia ID da categoria
+    db = SessionLocal()
+    try:
+        matched_cat = db.query(Category).filter(Category.name.ilike(wizard["category_name"])).first()
+        if not matched_cat:
+            matched_cat = db.query(Category).first()
+        wizard["category_id"] = matched_cat.id if matched_cat else 1
+        wizard["category_name"] = matched_cat.name if matched_cat else "Decoração & Casa"
+    finally:
+        db.close()
+
+    await send_proposal_card(bot_token, chat_id, wizard)
+
+
+async def finalize_and_publish(bot_token: str, chat_id: int, wizard: dict, with_price: bool = True):
+    """Grava arquivos permanentemente e publica o modelo no banco de dados."""
+    await send_telegram_reply(bot_token, chat_id, "⏳ Publicando modelo e gravando arquivos no catálogo...")
+
+    unique_id = uuid.uuid4().hex[:8]
+    clean_title = "".join(c for c in wizard["title"] if c.isalnum() or c in ("-", "_", " ")).strip().replace(" ", "_")
+    if not clean_title:
+        clean_title = f"modelo_{unique_id}"
+
+    # 1. Foto de Capa
+    cover_info = wizard.get("cover_img")
+    saved_cover_name = ""
+    if cover_info and Path(cover_info["path"]).is_file():
+        c_ext = Path(cover_info["name"]).suffix.lower() or ".jpg"
+        saved_cover_name = f"{clean_title}_{unique_id}_cover{c_ext}"
+        shutil.move(str(cover_info["path"]), str(IMAGE_DIR / saved_cover_name))
+    else:
+        saved_cover_name = "default_3d_cover.png"
+
+    # 2. Galeria de fotos
+    saved_gallery_names = []
+    for idx, g_info in enumerate(wizard.get("gallery_imgs", [])):
+        if Path(g_info["path"]).is_file():
+            g_ext = Path(g_info["name"]).suffix.lower() or ".jpg"
+            g_name = f"{clean_title}_{unique_id}_gal_{idx+1}{g_ext}"
+            shutil.move(str(g_info["path"]), str(IMAGE_DIR / g_name))
+            saved_gallery_names.append(g_name)
+
+    # 3. Arquivo(s) 3D ou Link
+    if not wizard.get("files_3d") and wizard.get("external_url"):
+        saved_3d_name = ""
+        parts_count = 1
+        format_str = "LINK"
+        total_size = 0
+        files_3d_list_json = json.dumps([{"name": f"Link: {wizard['external_url']}", "size": 0}])
+    elif len(wizard.get("files_3d", [])) == 1:
+        f_3d = wizard["files_3d"][0]
+        f_ext = f_3d["ext"]
+        saved_3d_name = f"{clean_title}_{unique_id}{f_ext}"
+        target_3d = MODEL_DIR / saved_3d_name
+        shutil.move(str(f_3d["path"]), str(target_3d))
+        parts_count = f_3d.get("parts_count", 1)
+        format_str = f_ext.lstrip(".").upper()
+        total_size = f_3d.get("size", 0)
+        files_3d_list_json = json.dumps([{"name": f_3d["name"], "size": f_3d["size"]}])
+    else:
+        # Múltiplas peças -> Compacta em .ZIP
+        saved_3d_name = f"{clean_title}_{unique_id}.zip"
+        target_3d = MODEL_DIR / saved_3d_name
+        with zipfile.ZipFile(target_3d, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
+            for item in wizard.get("files_3d", []):
+                if Path(item["path"]).is_file():
+                    zf.write(item["path"], arcname=item["name"])
+        parts_count = len(wizard.get("files_3d", []))
+        format_str = "ZIP"
+        total_size = target_3d.stat().st_size if target_3d.exists() else 0
+        files_3d_list_json = json.dumps([{"name": f["name"], "size": f["size"]} for f in wizard.get("files_3d", [])])
+
+    final_price = wizard["price"] if with_price else 0.0
+    show_price_flag = with_price and (wizard["price"] > 0)
+
+    # 4. Grava no Banco de Dados
+    db = SessionLocal()
+    try:
+        new_model = Model3D(
+            title=wizard["title"],
+            description=wizard["description"],
+            category_id=wizard["category_id"],
+            category_name=wizard["category_name"],
+            image_filename=saved_cover_name,
+            gallery_images=json.dumps(saved_gallery_names),
+            file_3d_filename=saved_3d_name,
+            external_url=wizard.get("external_url"),
+            files_3d_list=files_3d_list_json,
+            parts_count=parts_count,
+            file_format=format_str,
+            file_size_bytes=total_size,
+            price=final_price,
+            show_price=show_price_flag,
+            is_featured=wizard.get("is_featured", False),
+            order_count=wizard.get("order_count", 18),
+            is_public=True
+        )
+        db.add(new_model)
+        db.commit()
+        db.refresh(new_model)
+        model_id = new_model.id
+    finally:
+        db.close()
+
+    # Limpa temporários
+    shutil.rmtree(wizard["temp_dir"], ignore_errors=True)
+    del USER_WIZARDS[chat_id]
+
+    total_photos = 1 + len(saved_gallery_names)
+    price_label = f"R$ {final_price:.2f}" if show_price_flag else "Sob Consulta"
+
+    await send_telegram_reply(
+        bot_token, chat_id,
+        f"🎉 *Modelo Publicado com Sucesso!* 🚀\n\n"
+        f"📦 *{wizard['title']}* já está disponível na vitrine online!\n\n"
+        f"• ID: `#{model_id}`\n"
+        f"• Valor: *{price_label}*\n"
+        f"• Categoria: {wizard['category_name']}\n"
+        f"• Fotos cadastradas: {total_photos}\n"
+        f"• Peças 3D: {parts_count}\n\n"
+        f"👉 [Visualizar na Vitrine Online]({CATALOG_DOMAIN})"
+    )
 
 
 async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: Optional[str] = None) -> dict:
@@ -248,7 +503,6 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
     Ponto de entrada de atualizações do Telegram com proteção de duplicatas
     e serialização por chat.
     """
-    # 0. Deduplicação absoluta de update_id (descarta retentativas por timeout)
     update_id = update.get("update_id")
     if update_id:
         if update_id in PROCESSED_UPDATES:
@@ -260,7 +514,6 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             old = PROCESSED_QUEUE.pop(0)
             PROCESSED_UPDATES.discard(old)
 
-    # Identifica o chat_id para aplicar lock sequencial
     callback_query = update.get("callback_query")
     message = update.get("message") or update.get("channel_post")
     chat_id = None
@@ -272,7 +525,6 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
     if not chat_id:
         return await _dispatch_telegram_update(update, bot_token, admin_chat_id)
 
-    # Bloqueio por chat: se o usuário enviar vários arquivos juntos, processa um por um
     lock = CHAT_LOCKS.setdefault(chat_id, asyncio.Lock())
     async with lock:
         return await _dispatch_telegram_update(update, bot_token, admin_chat_id)
@@ -280,9 +532,8 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
 
 async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id: Optional[str] = None) -> dict:
     """
-    Executa a máquina de estados (FSM) do assistente de cadastro.
+    Processador inteligente de mensagens, arquivos e botões interativos com IA.
     """
-    # 1. Extrai mensagem ou callback_query
     callback_query = update.get("callback_query")
     message = update.get("message") or update.get("channel_post")
 
@@ -291,6 +542,7 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
     text = ""
     document = None
     photos = None
+    callback_data = None
 
     if callback_query:
         from_user = callback_query.get("from", {})
@@ -306,16 +558,14 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
         text = str(message.get("text") or message.get("caption") or "").strip()
         document = message.get("document")
         photos = message.get("photo")
-        callback_data = None
     else:
         return {"ok": True, "ignored": "No valid message or callback"}
 
     if not chat_id:
         return {"ok": False, "error": "No chat_id"}
 
-    # 2. Comando especial de autorização por senha
+    # 1. Comando de autorização por senha
     if text.startswith("/auth"):
-        message_id = message.get("message_id") if message else None
         parts = text.split(maxsplit=1)
         if len(parts) >= 2 and parts[1].strip() == ADMIN_PASSWORD:
             _save_authorized_chat(str(user_id))
@@ -324,8 +574,8 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
                 bot_token, chat_id,
                 f"🔓 *Autorizado com Sucesso!*\n\n"
                 f"Olá André! Seu Telegram ID `{user_id}` foi autenticado com sucesso.\n"
-                f"Agora você pode usar todos os recursos do assistente!\n\n"
-                f"👉 Digite /newmodelo para cadastrar seu primeiro modelo."
+                f"Agora você pode cadastrar modelos enviando arquivos e fotos diretamente pelo chat!\n\n"
+                f"👉 Experimente encaminhar ou enviar um arquivo 3D e uma foto da peça."
             )
             return {"ok": True}
         else:
@@ -335,7 +585,7 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
             )
             return {"ok": False}
 
-    # 3. Validação de Segurança
+    # 2. Validação de Segurança
     if not is_authorized(user_id, str(chat_id), admin_chat_id):
         logger.warning(f"Tentativa de acesso não autorizada: user_id={user_id}, chat_id={chat_id}")
         await send_telegram_reply(
@@ -347,27 +597,34 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
         )
         return {"ok": False, "error": "Não autorizado"}
 
-    # 4. Comandos Globais
-    if text == "/cancelar" or text == "/cancel":
+    # 3. Comandos Globais
+    if text in ("/cancelar", "/cancel"):
         if chat_id in USER_WIZARDS:
+            shutil.rmtree(USER_WIZARDS[chat_id]["temp_dir"], ignore_errors=True)
             del USER_WIZARDS[chat_id]
         await send_telegram_reply(
             bot_token, chat_id,
             "❌ *Cadastro cancelado.* Os arquivos temporários foram descartados.\n\n"
-            "Quando quiser começar de novo, basta digitar /newmodelo!"
+            "Quando quiser cadastrar novamente, basta enviar o arquivo 3D e a foto da peça!"
         )
         return {"ok": True}
 
-    if text == "/start" or text == "/ajuda" or text == "/help":
+    if text in ("/start", "/ajuda", "/help"):
         await send_telegram_reply(
             bot_token, chat_id,
-            "👋 *Olá André! Bem-vindo ao Assistente Studio 3D.* 🤖\n\n"
-            "Aqui você cadastra modelos completos diretamente pelo celular, com fotos e arquivos 3D!\n\n"
-            "🚀 *Comandos Disponíveis:*\n"
-            "👉 /newmodelo - Iniciar cadastro guiado de modelo 3D\n"
-            "👉 /status - Ver total de modelos no catálogo\n"
-            "👉 /cancelar - Cancelar cadastro em andamento\n"
-            "👉 /ajuda - Exibir esta mensagem"
+            "🤖 *Assistente Studio 3D com IA MiniMax* ✨\n\n"
+            "Cadastrar novas peças agora é super prático e inteligente:\n\n"
+            "1️⃣ *Envie ou encaminhe o arquivo 3D* (`.STL`, `.3MF`, `.ZIP`, `.RAR`) ou link do modelo;\n"
+            "2️⃣ *Envie a foto da peça* impressa;\n\n"
+            "✨ *O que a IA faz por você:*\n"
+            "• Cria um título comercial chamativo em português (nada de nomes feios de arquivo);\n"
+            "• Pesquisa referências de preços no mercado brasileiro (Shopee / Mercado Livre);\n"
+            "• Sugere o preço justo de venda e escreve a descrição persuasiva;\n"
+            "• Apresenta uma proposta para você **aprovar em 1 clique** ou personalizar!\n\n"
+            "🚀 *Comandos:*\n"
+            "👉 /newmodelo - Iniciar novo rascunho\n"
+            "👉 /status - Ver catálogo\n"
+            "👉 /cancelar - Cancelar rascunho atual"
         )
         return {"ok": True}
 
@@ -388,741 +645,300 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
             db.close()
         return {"ok": True}
 
-    # 5. Início do Assistente: /newmodelo
-    if text == "/newmodelo" or text == "/novo":
-        session_id = uuid.uuid4().hex[:6]
-        user_temp_dir = TEMP_TG_DIR / f"{chat_id}_{session_id}"
-        user_temp_dir.mkdir(parents=True, exist_ok=True)
-
-        USER_WIZARDS[chat_id] = {
-            "session_id": session_id,
-            "temp_dir": user_temp_dir,
-            "step": "WAIT_3D",
-            "files_3d": [],
-            "external_url": None,
-            "cover_img": None,
-            "gallery_imgs": [],
-            "title": "",
-            "category_id": 1,
-            "category_name": "Decoração & Casa",
-            "price": 0.0,
-            "show_price": True,
-            "is_featured": False,
-            "order_count": 18,
-            "description": ""
-        }
-
+    # 4. Início explícito de novo modelo
+    if text in ("/newmodelo", "/novo"):
+        if chat_id in USER_WIZARDS:
+            shutil.rmtree(USER_WIZARDS[chat_id]["temp_dir"], ignore_errors=True)
+            del USER_WIZARDS[chat_id]
+        wizard = _get_or_create_wizard(chat_id)
         is_local_api = "api.telegram.org" not in TELEGRAM_API_SERVER
         limit_desc = "2.000 MB (2 GB)" if is_local_api else "20 MB"
 
         await send_telegram_reply(
             bot_token, chat_id,
-            "🚀 *Cadastro de Novo Modelo 3D (Passo 1 de 5)*\n\n"
-            "📁 *Envie o(s) Arquivo(s) 3D OU o Link do Site:*\n"
-            "• Envie o arquivo `.STL`, `.3MF`, `.STEP`, `.OBJ` ou `.ZIP`\n"
-            "• **OU cole o link do site/personalizador** (ex: MakerWorld, Thingiverse, Cults3D, etc.)\n\n"
-            "💡 *Dicas:*\n"
-            f"• **Limite de Arquivo:** O assistente aceita arquivos e pacotes de até **{limit_desc}**!\n"
-            "• **Personalizador Web:** Se você colar o link do site agora, você não precisa enviar o arquivo físico!"
+            "🚀 *Novo Cadastro com IA Iniciado!*\n\n"
+            "📁 *Envie o Arquivo 3D* (`.STL`, `.3MF`, `.ZIP`, `.RAR`) **OU cole o link** do modelo;\n"
+            "🖼️ E envie a **foto da peça** (pode mandar juntos ou um depois do outro).\n\n"
+            f"💡 _Suporte a arquivos de até {limit_desc}!_"
         )
         return {"ok": True}
 
-    # Se não há wizard ativo para este usuário
-    wizard = USER_WIZARDS.get(chat_id)
-    if not wizard:
-        await send_telegram_reply(
-            bot_token, chat_id,
-            "💡 Digite /newmodelo para iniciar o cadastro passo a passo de uma nova peça 3D!"
-        )
+    wizard = _get_or_create_wizard(chat_id)
+
+    # =========================================================================
+    # 5. Tratamento de Botões Inline (Callbacks)
+    # =========================================================================
+    if callback_data:
+        # APROVAÇÃO E PUBLICAÇÃO
+        if callback_data == "ai_approve_price":
+            await finalize_and_publish(bot_token, chat_id, wizard, with_price=True)
+            return {"ok": True}
+
+        if callback_data == "ai_approve_quote":
+            await finalize_and_publish(bot_token, chat_id, wizard, with_price=False)
+            return {"ok": True}
+
+        # CANCELAR
+        if callback_data == "ai_cancel":
+            shutil.rmtree(wizard["temp_dir"], ignore_errors=True)
+            del USER_WIZARDS[chat_id]
+            await send_telegram_reply(bot_token, chat_id, "❌ Cadastro cancelado com sucesso. Arquivos descartados.")
+            return {"ok": True}
+
+        # ALTERAR CATEGORIA
+        if callback_data == "ai_change_cat":
+            db = SessionLocal()
+            categories = []
+            try:
+                categories = db.query(Category).all()
+            finally:
+                db.close()
+
+            cat_buttons = []
+            row = []
+            for cat in categories:
+                row.append({"text": cat.name, "callback_data": f"ai_setcat_{cat.id}"})
+                if len(row) == 2:
+                    cat_buttons.append(row)
+                    row = []
+            if row:
+                cat_buttons.append(row)
+            cat_buttons.append([{"text": "⬅️ Voltar à Proposta", "callback_data": "ai_back_to_card"}])
+
+            await send_telegram_reply(
+                bot_token, chat_id,
+                "🏷️ *Escolha a categoria desejada:*",
+                reply_markup={"inline_keyboard": cat_buttons}
+            )
+            return {"ok": True}
+
+        if callback_data.startswith("ai_setcat_"):
+            try:
+                cat_id = int(callback_data.split("_")[-1])
+                db = SessionLocal()
+                try:
+                    cat = db.query(Category).filter(Category.id == cat_id).first()
+                    if cat:
+                        wizard["category_id"] = cat.id
+                        wizard["category_name"] = cat.name
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.error(f"Erro ao selecionar categoria: {e}")
+
+            await send_telegram_reply(bot_token, chat_id, f"✅ Categoria alterada para: *{wizard['category_name']}*")
+            await send_proposal_card(bot_token, chat_id, wizard)
+            return {"ok": True}
+
+        # ALTERAR VALOR
+        if callback_data == "ai_change_price":
+            wizard["step"] = "WAIT_CUSTOM_PRICE"
+            await send_telegram_reply(
+                bot_token, chat_id,
+                "💰 *Digite o novo valor em Reais* (ex: `45` ou `49,90`):\n"
+                "_Se quiser sob consulta, digite 0._"
+            )
+            return {"ok": True}
+
+        # ALTERAR TÍTULO
+        if callback_data == "ai_change_title":
+            wizard["step"] = "WAIT_CUSTOM_TITLE"
+            await send_telegram_reply(
+                bot_token, chat_id,
+                "📝 *Digite o novo título comercial para este modelo:*"
+            )
+            return {"ok": True}
+
+        # ADICIONAR MAIS FOTOS
+        if callback_data == "ai_add_photos":
+            await send_telegram_reply(
+                bot_token, chat_id,
+                "📸 *Envie agora a(s) próxima(s) foto(s) da peça!*\n"
+                "Elas serão adicionadas automaticamente à galeria da vitrine."
+            )
+            return {"ok": True}
+
+        # VOLTAR AO CARD
+        if callback_data == "ai_back_to_card":
+            await send_proposal_card(bot_token, chat_id, wizard)
+            return {"ok": True}
+
+    # =========================================================================
+    # 6. Estados de Edição Manual de Campos
+    # =========================================================================
+    if wizard.get("step") == "WAIT_CUSTOM_PRICE" and text:
+        clean_price_str = re.sub(r'[^\d,.]', '', text).replace(',', '.')
+        try:
+            new_p = float(clean_price_str)
+            wizard["price"] = new_p
+            wizard["show_price"] = new_p > 0
+            wizard["step"] = "PROPOSAL"
+            lbl = f"R$ {new_p:.2f}" if new_p > 0 else "Sob Consulta"
+            await send_telegram_reply(bot_token, chat_id, f"✅ Preço atualizado para: *{lbl}*")
+            await send_proposal_card(bot_token, chat_id, wizard)
+            return {"ok": True}
+        except Exception:
+            await send_telegram_reply(bot_token, chat_id, "⚠️ Valor inválido. Digite apenas o valor numérico (ex: 45 ou 49,90):")
+            return {"ok": True}
+
+    if wizard.get("step") == "WAIT_CUSTOM_TITLE" and text:
+        wizard["title"] = text.strip()
+        wizard["step"] = "PROPOSAL"
+        await send_telegram_reply(bot_token, chat_id, f"✅ Título atualizado para: *{wizard['title']}*")
+        await send_proposal_card(bot_token, chat_id, wizard)
         return {"ok": True}
 
-    step = wizard.get("step")
-
     # =========================================================================
-    # PASSO 1: Aguardando Arquivo(s) 3D ou Link do Site
+    # 7. Recebimento de Links Externos (MakerWorld, Thingiverse, etc.)
     # =========================================================================
-    if step == "WAIT_3D":
-        # 1. Verifica se o usuário enviou um link/URL do site ou personalizador
-        url_match = re.search(r"(https?://[^\s]+|www\.[^\s]+)", text or "")
+    if text:
+        url_match = re.search(r"(https?://[^\s]+|www\.[^\s]+)", text)
         if url_match:
             detected_url = url_match.group(0)
             if not detected_url.startswith("http"):
                 detected_url = "https://" + detected_url
             wizard["external_url"] = detected_url
-            wizard["step"] = "WAIT_COVER"
-            await send_telegram_reply(
-                bot_token, chat_id,
-                f"🔗 *Link do modelo/personalizador registrado com sucesso!*\n"
-                f"`{detected_url}`\n\n"
-                f"---\n"
-                f"🖼️ *Passo 2 de 5: Foto da Peça (Capa)*\n"
-                f"Envie agora a foto principal da peça (esta foto será a vitrine no catálogo)."
-            )
-            return {"ok": True}
-
-        # Se clicou no botão "Concluir Arquivos 3D" ou digitou comando de conclusão
-        if callback_data == "files_3d_done" or text.lower() in ("/concluir", "/concluir_arquivos", "concluir", "pronto", "ok", "avancar", "avançar"):
-            if not wizard["files_3d"] and not wizard.get("external_url"):
-                await send_telegram_reply(
-                    bot_token, chat_id,
-                    "⚠️ Nenhum arquivo 3D ou link foi enviado ainda. Envie o arquivo `.STL`, `.3MF` ou cole o link do site primeiro."
-                )
-                return {"ok": True}
-
-            wizard["step"] = "WAIT_COVER"
-            total_parts = sum(f.get("parts_count", 1) for f in wizard["files_3d"])
-            await send_telegram_reply(
-                bot_token, chat_id,
-                f"✅ *Arquivos 3D concluídos com sucesso!* ({len(wizard['files_3d'])} arquivo(s), {total_parts} peça(s)).\n\n"
-                f"---\n"
-                f"🖼️ *Passo 2 de 5: Foto da Peça (Capa)*\n"
-                f"Envie agora a foto principal da peça (esta foto será a vitrine no catálogo)."
-            )
-            return {"ok": True}
-
-        # Se já enviou arquivo 3D ou link e mandou uma foto, transiciona automaticamente para o Passo 2 (Capa)
-        is_photo = bool(photos) or (bool(document) and Path(document.get("file_name", "")).suffix.lower() in ALLOWED_IMG_EXTENSIONS)
-        if is_photo and (wizard["files_3d"] or wizard.get("external_url")):
-            wizard["step"] = "WAIT_COVER"
-            step = "WAIT_COVER"
-        else:
-            if not document:
-                await send_telegram_reply(
-                    bot_token, chat_id,
-                    "⚠️ *Por favor, envie o arquivo 3D como Documento/Arquivo* (`.STL`, `.3MF`, `.ZIP`) **OU cole o link do site/personalizador**.\n\n"
-                    f"_💡 Se o arquivo for maior que 20 MB, envie diretamente pelo painel web: {CATALOG_DOMAIN}/admin_"
-                )
-                return {"ok": True}
-
-            file_size_bytes = document.get("file_size", 0)
-            is_local_api = "api.telegram.org" not in TELEGRAM_API_SERVER
-            max_tg_size = 2000 * 1024 * 1024 if is_local_api else 20 * 1024 * 1024
-            if file_size_bytes and file_size_bytes > max_tg_size:
-                size_mb = file_size_bytes / (1024 * 1024)
-                await send_telegram_reply(
-                    bot_token, chat_id,
-                    f"⚠️ *Arquivo muito grande ({size_mb:.1f} MB)*\n\n"
-                    f"O limite máximo aceito pelo bot é de **{'2.000 MB (2 GB)' if is_local_api else '20 MB'}**.\n\n"
-                    f"💡 *Como publicar este modelo:*\n"
-                    f"Faça o upload diretamente pelo navegador no painel web:\n"
-                    f"🌐 `{CATALOG_DOMAIN}/admin`"
-                )
-                return {"ok": True}
-
-            raw_file_name = document.get("file_name") or "modelo.stl"
-            file_name = Path(raw_file_name).name
-            file_name = re.sub(r'[^\w\-_\. ()]', '_', file_name)
-            ext = Path(file_name).suffix.lower()
-
-            if ext not in ALLOWED_3D_EXTENSIONS:
-                await send_telegram_reply(
-                    bot_token, chat_id,
-                    f"⚠️ A extensão `{ext}` não é permitida. Envie arquivos `.STL`, `.3MF`, `.STEP`, `.OBJ` ou `.ZIP`."
-                )
-                return {"ok": True}
-
-            # Evita adicionar arquivo com o mesmo nome repetido
-            if any(f["name"] == file_name for f in wizard["files_3d"]):
-                logger.info(f"Arquivo já adicionado ao modelo atual: {file_name}")
-                return {"ok": True}
-
-            await send_telegram_reply(bot_token, chat_id, f"⏳ Baixando `{file_name}`...")
-
-            target_file = wizard["temp_dir"] / file_name
-            success, err_msg = await download_telegram_file(bot_token, document.get("file_id"), target_file)
-            if not success:
-                if "file is too big" in err_msg.lower():
-                    await send_telegram_reply(
-                        bot_token, chat_id,
-                        f"⚠️ *Arquivo maior que 20 MB (Limite da API do Telegram)*\n\n"
-                        f"O Telegram não permite que robôs baixem arquivos com mais de 20 MB.\n\n"
-                        f"💡 *Soluções:*\n"
-                        f"1️⃣ Acesse o painel web `{CATALOG_DOMAIN}/admin` para subir arquivos de até 500 MB;\n"
-                        f"2️⃣ Ou envie os arquivos `.STL` das peças individualmente aqui no chat."
-                    )
-                else:
-                    await send_telegram_reply(
-                        bot_token, chat_id,
-                        f"❌ *Falha no download:* {err_msg}.\n\n"
-                        f"Tente enviar novamente ou faça o upload diretamente pelo painel web:\n"
-                        f"🌐 `{CATALOG_DOMAIN}/admin`"
-                    )
-                return {"ok": False}
-
-            file_size = target_file.stat().st_size
-            parts_count = 1
-
-            # Inspeciona se for .ZIP
-            if ext == ".zip":
-                try:
-                    with zipfile.ZipFile(target_file, "r") as zf:
-                        pieces = [n for n in zf.namelist() if any(n.lower().endswith(e) for e in ALLOWED_3D_EXTENSIONS)]
-                        if pieces:
-                            parts_count = len(pieces)
-                except Exception:
-                    pass
-
-            wizard["files_3d"].append({
-                "name": file_name,
-                "path": target_file,
-                "size": file_size,
-                "ext": ext,
-                "parts_count": parts_count
-            })
-
-            # Se for pacote consolidado (.ZIP, .RAR, .7Z), avança direto para a foto de capa
-            if ext in (".zip", ".rar", ".7z"):
-                wizard["step"] = "WAIT_COVER"
-                pkg_type = ext.replace(".", "").upper()
-                count_str = f" — *{parts_count} peça(s) detectada(s)*" if parts_count > 1 else ""
-                await send_telegram_reply(
-                    bot_token, chat_id,
-                    f"✅ *Pacote {pkg_type} recebido!*\n"
-                    f"📁 `{file_name}` ({file_size/1024/1024:.2f} MB){count_str}.\n\n"
-                    f"---\n"
-                    f"🖼️ *Passo 2 de 5: Foto da Peça (Capa)*\n"
-                    f"Envie agora a foto principal da peça (esta foto será a vitrine no catálogo)."
-                )
-                return {"ok": True}
+            await send_telegram_reply(bot_token, chat_id, f"🔗 *Link do modelo registrado!*\n`{detected_url}`")
+            if wizard.get("cover_img"):
+                await trigger_ai_proposal(bot_token, chat_id, wizard, caption=text)
             else:
-                # Se for arquivo avulso (.STL, .3MF, etc.), permite enviar mais peças ou concluir
-                count = len(wizard["files_3d"])
-                keyboard = {
-                    "inline_keyboard": [
-                        [{"text": f"➡️ Concluir Arquivos 3D ({count} peça{'s' if count > 1 else ''})", "callback_data": "files_3d_done"}]
-                    ]
-                }
                 await send_telegram_reply(
                     bot_token, chat_id,
-                    f"✅ *Peça 3D #{count} recebida com sucesso!*\n"
-                    f"📁 `{file_name}` ({file_size/1024/1024:.2f} MB)\n\n"
-                    f"💡 *O modelo possui mais peças?*\n"
-                    f"• Se tiver mais peças `.STL`, envie o próximo arquivo agora;\n"
-                    f"• Se já enviou todas as peças deste modelo, clique no botão abaixo ou envie a foto de capa:",
-                    reply_markup=keyboard
+                    "🖼️ *Agora envie a foto da peça impressa* para a IA analisar o visual e gerar a proposta completa!"
                 )
-                return {"ok": True}
-
-    # =========================================================================
-    # PASSO 2: Aguardando Foto de Capa Principal
-    # =========================================================================
-    if step == "WAIT_COVER":
-        file_id = None
-        orig_name = "capa.jpg"
-
-        if photos:
-            file_id = photos[-1].get("file_id")
-            orig_name = f"capa_{uuid.uuid4().hex[:4]}.jpg"
-        elif document:
-            doc_ext = Path(document.get("file_name", "")).suffix.lower()
-            if doc_ext in ALLOWED_IMG_EXTENSIONS:
-                file_id = document.get("file_id")
-                orig_name = document.get("file_name")
-
-        if not file_id:
-            await send_telegram_reply(
-                bot_token, chat_id,
-                "⚠️ Por favor, envie uma imagem válida (`.JPG`, `.PNG`, `.WEBP`) para ser a foto de capa."
-            )
             return {"ok": True}
 
-        await send_telegram_reply(bot_token, chat_id, "⏳ Baixando foto de capa...")
+    # =========================================================================
+    # 8. Recebimento de Imagens (Capa ou Galeria)
+    # =========================================================================
+    is_img_doc = bool(document) and Path(document.get("file_name", "")).suffix.lower() in ALLOWED_IMG_EXTENSIONS
+    if photos or is_img_doc:
+        if photos:
+            img_file_id = photos[-1].get("file_id")
+            img_name = f"foto_{uuid.uuid4().hex[:6]}.jpg"
+        else:
+            img_file_id = document.get("file_id")
+            img_name = document.get("file_name") or f"foto_{uuid.uuid4().hex[:6]}.jpg"
 
-        target_cover = wizard["temp_dir"] / orig_name
-        success, err_msg = await download_telegram_file(bot_token, file_id, target_cover)
+        await send_telegram_reply(bot_token, chat_id, f"⏳ Baixando foto...")
+
+        target_img = wizard["temp_dir"] / img_name
+        success, err = await download_telegram_file(bot_token, img_file_id, target_img)
         if not success:
-            await send_telegram_reply(bot_token, chat_id, f"❌ Falha ao baixar imagem de capa: {err_msg}. Tente enviar novamente.")
+            await send_telegram_reply(bot_token, chat_id, f"❌ Falha ao baixar imagem: {err}")
             return {"ok": False}
 
-        wizard["cover_img"] = {
-            "name": orig_name,
-            "path": target_cover
-        }
-
-        # Pergunta explicitamente se tem mais fotos ou se quer avançar
-        wizard["step"] = "ASK_MORE_PHOTOS"
-
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "📸 Sim, Enviar Mais Fotos", "callback_data": "more_photos_yes"},
-                    {"text": "➡️ Não, Avançar para Título", "callback_data": "more_photos_no"}
-                ]
-            ]
-        }
-
-        await send_telegram_reply(
-            bot_token, chat_id,
-            f"✅ *Foto de Capa recebida com sucesso!*\n\n"
-            f"📸 *Deseja adicionar mais fotos deste modelo para a vitrine?*",
-            reply_markup=keyboard
-        )
-        return {"ok": True}
-
-    # =========================================================================
-    # PASSO 2.1: Pergunta se tem mais fotos ou avança para o Título
-    # =========================================================================
-    if step == "ASK_MORE_PHOTOS":
-        # Se escolheu NÃO adicionar mais fotos (botão ou comando texto)
-        if callback_data == "more_photos_no" or text.lower() in ("não", "nao", "n", "pular", "/pular", "concluir", "/concluir", "avancar", "avançar", "nao tenho", "não tenho", "pronto", "ok"):
-            wizard["step"] = "WAIT_TITLE"
-            total_photos = 1 + len(wizard["gallery_imgs"])
-            await send_telegram_reply(
-                bot_token, chat_id,
-                f"✅ *Fotos registradas:* {total_photos} foto(s) no total.\n\n"
-                f"---\n"
-                f"📝 *Passo 3 de 5: Título do Modelo*\n"
-                f"Digite o nome da peça (ex: _Casinhas Pinha Natal_):"
-            )
-            return {"ok": True}
-
-        # Se escolheu SIM, enviar mais fotos (botão ou comando texto)
-        if callback_data == "more_photos_yes" or text.lower() in ("sim", "s", "mais", "mais fotos", "quero"):
-            wizard["step"] = "WAIT_GALLERY_PHOTO"
-            await send_telegram_reply(
-                bot_token, chat_id,
-                "📸 *Envie agora a próxima foto* do modelo para a galeria:"
-            )
-            return {"ok": True}
-
-        # Se enviou uma foto diretamente sem clicar no botão
-        extra_file_id = None
-        extra_orig_name = f"gal_{len(wizard['gallery_imgs'])+1}.jpg"
-        if photos:
-            extra_file_id = photos[-1].get("file_id")
-        elif document and Path(document.get("file_name", "")).suffix.lower() in ALLOWED_IMG_EXTENSIONS:
-            extra_file_id = document.get("file_id")
-            extra_orig_name = document.get("file_name")
-
-        if extra_file_id:
-            await send_telegram_reply(bot_token, chat_id, "⏳ Baixando foto adicional...")
-            target_gal = wizard["temp_dir"] / extra_orig_name
-            success, err_msg = await download_telegram_file(bot_token, extra_file_id, target_gal)
-            if success:
-                wizard["gallery_imgs"].append({"name": extra_orig_name, "path": target_gal})
-                count = len(wizard["gallery_imgs"])
-                total_all = 1 + count
-                keyboard = {
-                    "inline_keyboard": [
-                        [
-                            {"text": "📸 Sim, Enviar Mais Fotos", "callback_data": "more_photos_yes"},
-                            {"text": f"➡️ Não, Avançar para Título ({total_all} fotos)", "callback_data": "more_photos_no"}
-                        ]
-                    ]
-                }
-                await send_telegram_reply(
-                    bot_token, chat_id,
-                    f"✅ *Foto extra #{count} adicionada!* (Total: {total_all} fotos cadastradas).\n\n"
-                    f"📸 *Deseja adicionar mais alguma foto?*",
-                    reply_markup=keyboard
-                )
-                return {"ok": True}
-
-        # Se digitou algo ou texto, re-exibe as opções
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "📸 Sim, Enviar Mais Fotos", "callback_data": "more_photos_yes"},
-                    {"text": "➡️ Não, Avançar para Título", "callback_data": "more_photos_no"}
-                ]
-            ]
-        }
-        await send_telegram_reply(
-            bot_token, chat_id,
-            "💡 *Deseja adicionar mais fotos deste modelo?*\nEscolha uma das opções abaixo:",
-            reply_markup=keyboard
-        )
-        return {"ok": True}
-
-    # =========================================================================
-    # PASSO 2.2: Aguardando envio da foto adicional
-    # =========================================================================
-    if step in ("WAIT_GALLERY_PHOTO", "WAIT_GALLERY"):
-        # Se desistir e quiser avançar
-        if callback_data in ("more_photos_no", "gallery_done") or text.lower() in ("não", "nao", "n", "pular", "/pular", "concluir", "/concluir", "chega", "avançar", "avancar"):
-            wizard["step"] = "WAIT_TITLE"
-            total_photos = 1 + len(wizard["gallery_imgs"])
-            await send_telegram_reply(
-                bot_token, chat_id,
-                f"✅ *Fotos registradas:* {total_photos} foto(s) no total.\n\n"
-                f"---\n"
-                f"📝 *Passo 3 de 5: Título do Modelo*\n"
-                f"Digite o nome da peça (ex: _Casinhas Pinha Natal_):"
-            )
-            return {"ok": True}
-
-        extra_file_id = None
-        extra_orig_name = f"gal_{len(wizard['gallery_imgs'])+1}.jpg"
-        if photos:
-            extra_file_id = photos[-1].get("file_id")
-        elif document and Path(document.get("file_name", "")).suffix.lower() in ALLOWED_IMG_EXTENSIONS:
-            extra_file_id = document.get("file_id")
-            extra_orig_name = document.get("file_name")
-
-        if extra_file_id:
-            await send_telegram_reply(bot_token, chat_id, "⏳ Baixando foto adicional...")
-            target_gal = wizard["temp_dir"] / extra_orig_name
-            success, err_msg = await download_telegram_file(bot_token, extra_file_id, target_gal)
-            if success:
-                wizard["gallery_imgs"].append({"name": extra_orig_name, "path": target_gal})
-                count = len(wizard["gallery_imgs"])
-                total_all = 1 + count
-                wizard["step"] = "ASK_MORE_PHOTOS"
-                keyboard = {
-                    "inline_keyboard": [
-                        [
-                            {"text": "📸 Sim, Enviar Mais Fotos", "callback_data": "more_photos_yes"},
-                            {"text": f"➡️ Não, Avançar para Título ({total_all} fotos)", "callback_data": "more_photos_no"}
-                        ]
-                    ]
-                }
-                await send_telegram_reply(
-                    bot_token, chat_id,
-                    f"✅ *Foto extra #{count} adicionada!* (Total: {total_all} fotos cadastradas).\n\n"
-                    f"📸 *Deseja adicionar mais alguma foto?*",
-                    reply_markup=keyboard
-                )
-                return {"ok": True}
+        # Primeira foto se torna a capa principal
+        if not wizard.get("cover_img"):
+            wizard["cover_img"] = {"name": img_name, "path": target_img}
+            # Se já possuímos arquivo 3D ou link, ativa a IA!
+            if wizard.get("files_3d") or wizard.get("external_url"):
+                await trigger_ai_proposal(bot_token, chat_id, wizard, caption=text)
             else:
                 await send_telegram_reply(
                     bot_token, chat_id,
-                    f"⚠️ Falha ao baixar imagem: {err_msg}. Tente enviar novamente ou avance:",
-                    reply_markup={"inline_keyboard": [[{"text": "➡️ Avançar para Título", "callback_data": "more_photos_no"}]]}
+                    "🖼️ *Foto da peça recebida com sucesso!*\n\n"
+                    "📁 Agora envie o **arquivo 3D** (`.STL`, `.3MF`, `.ZIP`, `.RAR`) ou o **link do site** para a IA gerar o anúncio!"
                 )
-                return {"ok": True}
-
-        await send_telegram_reply(
-            bot_token, chat_id,
-            "📸 *Por favor, envie a foto da peça*, ou clique no botão abaixo para avançar:",
-            reply_markup={"inline_keyboard": [[{"text": "➡️ Não Tenho Mais Fotos (Avançar)", "callback_data": "more_photos_no"}]]}
-        )
-        return {"ok": True}
-
-    # =========================================================================
-    # PASSO 3: Aguardando Título
-    # =========================================================================
-    if step == "WAIT_TITLE":
-        if not text:
-            await send_telegram_reply(bot_token, chat_id, "⚠️ Digite o título do modelo:")
+            return {"ok": True}
+        else:
+            # Fotos subsequentes são adicionadas à galeria
+            wizard["gallery_imgs"].append({"name": img_name, "path": target_img})
+            total_gal = 1 + len(wizard["gallery_imgs"])
+            if wizard.get("step") == "PROPOSAL":
+                await send_telegram_reply(bot_token, chat_id, f"📸 *Foto extra adicionada!* (Total de {total_gal} fotos para a vitrine).")
+                await send_proposal_card(bot_token, chat_id, wizard)
+            else:
+                await send_telegram_reply(bot_token, chat_id, f"📸 *Foto extra salva!* (Total: {total_gal} fotos).")
             return {"ok": True}
 
-        wizard["title"] = text
-        wizard["step"] = "WAIT_CATEGORY"
-
-        # Carrega categorias do banco para montar os botões inline
-        db = SessionLocal()
-        categories = []
-        try:
-            categories = db.query(Category).all()
-        finally:
-            db.close()
-
-        keyboard_buttons = []
-        # Cria botões em colunas de 2
-        row = []
-        for cat in categories:
-            row.append({"text": cat.name, "callback_data": f"cat_{cat.id}"})
-            if len(row) == 2:
-                keyboard_buttons.append(row)
-                row = []
-        if row:
-            keyboard_buttons.append(row)
-
-        await send_telegram_reply(
-            bot_token, chat_id,
-            f"✅ *Título salvo:* {text}\n\n"
-            f"---\n"
-            f"🏷️ *Passo 4 de 5: Categoria*\n"
-            f"Selecione a categoria deste modelo clicando em um dos botões abaixo:",
-            reply_markup={"inline_keyboard": keyboard_buttons}
-        )
-        return {"ok": True}
-
     # =========================================================================
-    # PASSO 4: Aguardando Categoria
+    # 9. Recebimento de Arquivos 3D (.STL, .3MF, .ZIP, .RAR, etc.)
     # =========================================================================
-    if step == "WAIT_CATEGORY":
-        cat_id = None
-        if callback_data and callback_data.startswith("cat_"):
+    if document:
+        raw_file_name = document.get("file_name") or "modelo.stl"
+        file_name = Path(raw_file_name).name
+        file_name = re.sub(r'[^\w\-_\. ()]', '_', file_name)
+        ext = Path(file_name).suffix.lower()
+
+        if ext not in ALLOWED_3D_EXTENSIONS:
+            await send_telegram_reply(
+                bot_token, chat_id,
+                f"⚠️ O formato `{ext}` não é reconhecido. Envie arquivos 3D (`.STL`, `.3MF`, `.OBJ`, `.ZIP`, `.RAR`) ou fotos (`.JPG`, `.PNG`)."
+            )
+            return {"ok": True}
+
+        # Limite de tamanho
+        file_size_bytes = document.get("file_size", 0)
+        is_local_api = "api.telegram.org" not in TELEGRAM_API_SERVER
+        max_tg_size = 2000 * 1024 * 1024 if is_local_api else 20 * 1024 * 1024
+        if file_size_bytes and file_size_bytes > max_tg_size:
+            size_mb = file_size_bytes / (1024 * 1024)
+            await send_telegram_reply(
+                bot_token, chat_id,
+                f"⚠️ *Arquivo muito grande ({size_mb:.1f} MB)*\n\n"
+                f"O limite máximo aceito pela Bot API é de **{'2.000 MB (2 GB)' if is_local_api else '20 MB'}**.\n\n"
+                f"💡 Acesse `{CATALOG_DOMAIN}/admin` para fazer o upload diretamente pelo navegador!"
+            )
+            return {"ok": True}
+
+        # Evita duplicatas do mesmo arquivo no mesmo modelo
+        if any(f["name"] == file_name for f in wizard.get("files_3d", [])):
+            logger.info(f"Arquivo já adicionado ao modelo atual: {file_name}")
+            return {"ok": True}
+
+        await send_telegram_reply(bot_token, chat_id, f"⏳ Baixando `{file_name}`...")
+
+        target_file = wizard["temp_dir"] / file_name
+        success, err_msg = await download_telegram_file(bot_token, document.get("file_id"), target_file)
+        if not success:
+            await send_telegram_reply(bot_token, chat_id, f"❌ Falha no download: {err_msg}")
+            return {"ok": False}
+
+        file_size = target_file.stat().st_size
+        parts_count = 1
+
+        # Se for ZIP, inspeciona peças
+        if ext == ".zip":
             try:
-                cat_id = int(callback_data.split("_")[1])
-            except:
+                with zipfile.ZipFile(target_file, "r") as zf:
+                    pieces = [n for n in zf.namelist() if any(n.lower().endswith(e) for e in ALLOWED_3D_EXTENSIONS)]
+                    if pieces:
+                        parts_count = len(pieces)
+            except Exception:
                 pass
 
-        db = SessionLocal()
-        try:
-            if cat_id:
-                cat = db.query(Category).filter(Category.id == cat_id).first()
-            else:
-                # Tenta buscar por texto
-                cat = db.query(Category).filter(Category.name.ilike(f"%{text}%")).first()
+        wizard["files_3d"].append({
+            "name": file_name,
+            "path": target_file,
+            "size": file_size,
+            "ext": ext,
+            "parts_count": parts_count
+        })
 
-            if not cat:
-                cat = db.query(Category).first()
+        size_mb = file_size / (1024 * 1024)
+        pkg_info = f" ({parts_count} peças detectadas)" if parts_count > 1 else ""
 
-            wizard["category_id"] = cat.id
-            wizard["category_name"] = cat.name
-        finally:
-            db.close()
-
-        wizard["step"] = "WAIT_PRICE"
-
-        await send_telegram_reply(
-            bot_token, chat_id,
-            f"✅ *Categoria selecionada:* {wizard['category_name']}\n\n"
-            f"---\n"
-            f"💰 *Passo 5 de 5: Preço do Modelo*\n"
-            f"Digite o preço da peça em Reais (ex: `50` ou `50,00`).\n"
-            f"_Se for sob consulta / orçamento personalizado, digite `0`._"
-        )
-        return {"ok": True}
-
-    # =========================================================================
-    # PASSO 6: Aguardando Preço
-    # =========================================================================
-    if step == "WAIT_PRICE":
-        clean_price_str = re.sub(r'[^\d,.]', '', text).replace(',', '.')
-        try:
-            price = float(clean_price_str)
-        except:
-            price = 0.0
-
-        wizard["price"] = price
-
-        if price > 0:
-            wizard["step"] = "WAIT_SHOW_PRICE"
-            keyboard = {
-                "inline_keyboard": [
-                    [
-                        {"text": f"✅ Sim, exibir R$ {price:.2f}", "callback_data": "showprice_yes"},
-                        {"text": "💬 Não, exibir 'Sob Consulta'", "callback_data": "showprice_no"}
-                    ]
-                ]
-            }
+        # Se já tiver foto de capa, ativa a IA!
+        if wizard.get("cover_img"):
+            await trigger_ai_proposal(bot_token, chat_id, wizard, caption=text)
+        else:
             await send_telegram_reply(
                 bot_token, chat_id,
-                f"💰 *Preço registrado:* R$ {price:.2f}\n\n"
-                f"Deseja exibir este valor publicamente na vitrine para os clientes?",
-                reply_markup=keyboard
+                f"✅ *Arquivo 3D recebido:* `{file_name}` ({size_mb:.1f} MB){pkg_info}!\n\n"
+                f"🖼️ *Agora envie a foto da peça impressa* para a IA analisar o visual e gerar a proposta completa!"
             )
-            return {"ok": True}
-        else:
-            wizard["show_price"] = False
-            wizard["step"] = "WAIT_FEATURED"
-            keyboard = {
-                "inline_keyboard": [
-                    [
-                        {"text": "⭐ Sim, destacar", "callback_data": "feat_yes"},
-                        {"text": "⚪ Não destacar", "callback_data": "feat_no"}
-                    ]
-                ]
-            }
-            await send_telegram_reply(
-                bot_token, chat_id,
-                f"💰 *Preço definido como:* Sob Consulta\n\n"
-                f"Deseja destacar este modelo na seção **'Mais Pedidos'** da página principal?",
-                reply_markup=keyboard
-            )
-            return {"ok": True}
-
-    # =========================================================================
-    # PASSO 6.1: Exibir Preço na Vitrine?
-    # =========================================================================
-    if step == "WAIT_SHOW_PRICE":
-        if callback_data == "showprice_no" or text.lower() in ("não", "nao"):
-            wizard["show_price"] = False
-        else:
-            wizard["show_price"] = True
-
-        wizard["step"] = "WAIT_FEATURED"
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "⭐ Sim, destacar", "callback_data": "feat_yes"},
-                    {"text": "⚪ Não destacar", "callback_data": "feat_no"}
-                ]
-            ]
-        }
-        await send_telegram_reply(
-            bot_token, chat_id,
-            f"⭐ Deseja destacar este modelo na seção **'Mais Pedidos'** da vitrine?",
-            reply_markup=keyboard
-        )
         return {"ok": True}
 
-    # =========================================================================
-    # PASSO 6.2: Destacar em "Mais Pedidos"?
-    # =========================================================================
-    if step == "WAIT_FEATURED":
-        if callback_data == "feat_yes" or text.lower() in ("sim", "destacar"):
-            wizard["is_featured"] = True
-        else:
-            wizard["is_featured"] = False
-
-        wizard["step"] = "WAIT_DESC"
-
-        await send_telegram_reply(
-            bot_token, chat_id,
-            "📝 *Descrição da Peça:*\n"
-            "Digite os detalhes do modelo (material recomendado, dimensões, opções de cores, etc.):\n\n"
-            "_💡 Se preferir não escrever agora, digite /pular._"
-        )
+    # Se recebeu algum texto solto e o modelo já está com a proposta montada
+    if wizard.get("step") == "PROPOSAL":
+        await send_proposal_card(bot_token, chat_id, wizard)
         return {"ok": True}
 
-    # =========================================================================
-    # PASSO 6.3: Descrição e Confirmação Final
-    # =========================================================================
-    if step == "WAIT_DESC":
-        if text and text != "/pular":
-            wizard["description"] = text
-        else:
-            wizard["description"] = "Modelo de alta precisão impresso sob demanda com acabamento profissional."
-
-        wizard["step"] = "CONFIRM"
-
-        price_display = f"R$ {wizard['price']:.2f}" if wizard["show_price"] and wizard["price"] > 0 else "Sob Consulta"
-        feat_display = "Sim (★ Mais Pedido)" if wizard["is_featured"] else "Não"
-        total_3d_files = len(wizard["files_3d"])
-        if not wizard["files_3d"] and wizard.get("external_url"):
-            parts_summary = f"🔗 Link: `{wizard['external_url']}`"
-        elif total_3d_files == 1:
-            file_info = wizard["files_3d"][0]
-            parts_summary = f"`{file_info['name']}` ({file_info['parts_count']} peça(s))"
-        else:
-            parts_summary = f"{total_3d_files} peças (.STL agrupadas em .ZIP)"
-        
-        if wizard.get("external_url") and wizard["files_3d"]:
-            parts_summary += f" + 🔗 `{wizard['external_url']}`"
-
-        total_photos = 1 + len(wizard["gallery_imgs"])
-
-        summary_msg = (
-            f"📋 *Resumo do Modelo para Publicação:*\n\n"
-            f"🔹 *Título:* {wizard['title']}\n"
-            f"🏷️ *Categoria:* {wizard['category_name']}\n"
-            f"💰 *Preço:* {price_display}\n"
-            f"⭐ *Destaque:* {feat_display}\n"
-            f"🔥 *Prova Social:* {wizard['order_count']} pedidos realizados\n"
-            f"📁 *Origem 3D:* {parts_summary}\n"
-            f"🖼️ *Galeria:* {total_photos} foto(s) cadastradas\n"
-            f"📝 *Descrição:* _{wizard['description']}_\n\n"
-            f"Tudo pronto! Deseja publicar o modelo no catálogo agora?"
-        )
-
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "🚀 Publicar Modelo Agora", "callback_data": "publish_confirm"},
-                    {"text": "❌ Cancelar", "callback_data": "cancel_wizard"}
-                ]
-            ]
-        }
-
-        await send_telegram_reply(bot_token, chat_id, summary_msg, reply_markup=keyboard)
-        return {"ok": True}
-
-    # =========================================================================
-    # PASSO 7: Publicação Definitiva
-    # =========================================================================
-    if step == "CONFIRM":
-        if callback_data == "cancel_wizard" or text.lower() in ("cancelar", "cancel"):
-            del USER_WIZARDS[chat_id]
-            await send_telegram_reply(bot_token, chat_id, "❌ Publicação cancelada. Digite /newmodelo quando quiser recomeçar.")
-            return {"ok": True}
-
-        if callback_data == "publish_confirm" or text.lower() in ("sim", "publicar", "/publicar", "ok"):
-            await send_telegram_reply(bot_token, chat_id, "⏳ Publicando modelo e gravando arquivos no catálogo...")
-
-            unique_id = uuid.uuid4().hex[:8]
-            clean_title = "".join(c for c in wizard["title"] if c.isalnum() or c in ("-", "_", " ")).strip().replace(" ", "_")
-
-            # 1. Move Foto de Capa
-            cover_info = wizard["cover_img"]
-            c_ext = Path(cover_info["name"]).suffix.lower()
-            saved_cover_name = f"{clean_title}_{unique_id}_cover{c_ext}"
-            shutil.move(str(cover_info["path"]), str(IMAGE_DIR / saved_cover_name))
-
-            # 2. Move Fotos da Galeria
-            saved_gallery_names = []
-            for idx, g_info in enumerate(wizard["gallery_imgs"]):
-                g_ext = Path(g_info["name"]).suffix.lower()
-                g_name = f"{clean_title}_{unique_id}_gal_{idx+1}{g_ext}"
-                shutil.move(str(g_info["path"]), str(IMAGE_DIR / g_name))
-                saved_gallery_names.append(g_name)
-
-            # 3. Processa e Move Arquivo(s) 3D ou Registra Link
-            if not wizard["files_3d"] and wizard.get("external_url"):
-                saved_3d_name = ""
-                parts_count = 1
-                format_str = "LINK"
-                total_size = 0
-                files_3d_list_json = json.dumps([{"name": f"Link: {wizard['external_url']}", "size": 0}])
-            elif len(wizard["files_3d"]) == 1:
-                f_3d = wizard["files_3d"][0]
-                f_ext = f_3d["ext"]
-                saved_3d_name = f"{clean_title}_{unique_id}{f_ext}"
-                target_3d = MODEL_DIR / saved_3d_name
-                shutil.move(str(f_3d["path"]), str(target_3d))
-                parts_count = f_3d["parts_count"]
-                format_str = f_ext.lstrip(".").upper()
-                total_size = f_3d["size"]
-                files_3d_list_json = json.dumps([{"name": f["name"], "size": f["size"]} for f in wizard["files_3d"]])
-            else:
-                # Múltiplas peças (.STL) recebidas individualmente: empacota em .ZIP com compressão rápida
-                saved_3d_name = f"{clean_title}_{unique_id}.zip"
-                target_3d = MODEL_DIR / saved_3d_name
-                with zipfile.ZipFile(target_3d, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
-                    for item in wizard["files_3d"]:
-                        zf.write(item["path"], arcname=item["name"])
-                parts_count = len(wizard["files_3d"])
-                format_str = "ZIP"
-                total_size = target_3d.stat().st_size
-                files_3d_list_json = json.dumps([{"name": f["name"], "size": f["size"]} for f in wizard["files_3d"]])
-
-            # 4. Grava no Banco de Dados
-            db = SessionLocal()
-            try:
-                new_model = Model3D(
-                    title=wizard["title"],
-                    description=wizard["description"],
-                    category_id=wizard["category_id"],
-                    category_name=wizard["category_name"],
-                    image_filename=saved_cover_name,
-                    gallery_images=json.dumps(saved_gallery_names),
-                    file_3d_filename=saved_3d_name,
-                    external_url=wizard.get("external_url"),
-                    files_3d_list=files_3d_list_json,
-                    parts_count=parts_count,
-                    file_format=format_str,
-                    file_size_bytes=total_size,
-                    price=wizard["price"],
-                    show_price=wizard["show_price"],
-                    is_featured=wizard["is_featured"],
-                    order_count=wizard["order_count"],
-                    is_public=True
-                )
-                db.add(new_model)
-                db.commit()
-                db.refresh(new_model)
-                model_id = new_model.id
-            finally:
-                db.close()
-
-            # Limpa temporários
-            shutil.rmtree(wizard["temp_dir"], ignore_errors=True)
-            del USER_WIZARDS[chat_id]
-
-            total_photos = 1 + len(saved_gallery_names)
-            await send_telegram_reply(
-                bot_token, chat_id,
-                f"🎉 *Modelo Publicado com Sucesso!*\n\n"
-                f"📦 *{wizard['title']}* já está no ar para seus clientes!\n\n"
-                f"• ID: `#{model_id}`\n"
-                f"• Categoria: {wizard['category_name']}\n"
-                f"• Fotos na galeria: {total_photos}\n"
-                f"• Peças 3D: {parts_count}\n\n"
-                f"👉 [Visualizar na Vitrine Online]({CATALOG_DOMAIN})"
-            )
-            return {"ok": True}
-
+    # Se recebeu mensagem genérica sem arquivos
+    await send_telegram_reply(
+        bot_token, chat_id,
+        "💡 *Como cadastrar com IA:*\n"
+        "Envie ou encaminhe o **arquivo 3D** (`.STL`, `.3MF`, `.ZIP`, `.RAR`) e a **foto da peça** impressa!"
+    )
     return {"ok": True}
