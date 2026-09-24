@@ -252,10 +252,14 @@ async def create_order(
 
 @app.post("/api/telegram/webhook")
 async def telegram_webhook(request: Request):
-    """Recebe atualizações do Bot do Telegram para cadastrar modelos diretamente."""
+    """
+    Recebe atualizações do Bot do Telegram.
+    Responde HTTP 200 OK imediatamente (< 2ms) e processa em background
+    para evitar que o Telegram sofra timeout e envie mensagens duplicadas.
+    """
     update = await request.json()
-    res = await process_telegram_update(update, TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID)
-    return res
+    asyncio.create_task(process_telegram_update(update, TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID))
+    return {"ok": True}
 
 
 # ==========================================

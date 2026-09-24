@@ -235,10 +235,52 @@ async def download_telegram_file(bot_token: str, file_id: str, dest_path: Path) 
         return False, str(e)
 
 
+# Cache de updates processados para deduplicação instantânea (evita retentativas do Telegram)
+PROCESSED_UPDATES = set()
+PROCESSED_QUEUE = []
+
+# Locks por chat para garantir processamento estritamente sequencial sem concorrência
+CHAT_LOCKS: Dict[int, asyncio.Lock] = {}
+
+
 async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: Optional[str] = None) -> dict:
     """
-    Processa mensagens e callbacks recebidos pelo Bot do Telegram.
-    Implementa um assistente conversacional passo a passo (/newmodelo).
+    Ponto de entrada de atualizações do Telegram com proteção de duplicatas
+    e serialização por chat.
+    """
+    # 0. Deduplicação absoluta de update_id (descarta retentativas por timeout)
+    update_id = update.get("update_id")
+    if update_id:
+        if update_id in PROCESSED_UPDATES:
+            logger.info(f"Update duplicado ignorado: {update_id}")
+            return {"ok": True, "duplicate": True}
+        PROCESSED_UPDATES.add(update_id)
+        PROCESSED_QUEUE.append(update_id)
+        if len(PROCESSED_QUEUE) > 2000:
+            old = PROCESSED_QUEUE.pop(0)
+            PROCESSED_UPDATES.discard(old)
+
+    # Identifica o chat_id para aplicar lock sequencial
+    callback_query = update.get("callback_query")
+    message = update.get("message") or update.get("channel_post")
+    chat_id = None
+    if callback_query:
+        chat_id = callback_query.get("message", {}).get("chat", {}).get("id")
+    elif message:
+        chat_id = message.get("chat", {}).get("id")
+
+    if not chat_id:
+        return await _dispatch_telegram_update(update, bot_token, admin_chat_id)
+
+    # Bloqueio por chat: se o usuário enviar vários arquivos juntos, processa um por um
+    lock = CHAT_LOCKS.setdefault(chat_id, asyncio.Lock())
+    async with lock:
+        return await _dispatch_telegram_update(update, bot_token, admin_chat_id)
+
+
+async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id: Optional[str] = None) -> dict:
+    """
+    Executa a máquina de estados (FSM) do assistente de cadastro.
     """
     # 1. Extrai mensagem ou callback_query
     callback_query = update.get("callback_query")
@@ -479,6 +521,11 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
                 )
                 return {"ok": True}
 
+            # Evita adicionar arquivo com o mesmo nome repetido
+            if any(f["name"] == file_name for f in wizard["files_3d"]):
+                logger.info(f"Arquivo já adicionado ao modelo atual: {file_name}")
+                return {"ok": True}
+
             await send_telegram_reply(bot_token, chat_id, f"⏳ Baixando `{file_name}`...")
 
             target_file = wizard["temp_dir"] / file_name
@@ -523,13 +570,15 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
                 "parts_count": parts_count
             })
 
-            # Se for .ZIP, já é um pacote consolidado: avança para a foto de capa
-            if ext == ".zip":
+            # Se for pacote consolidado (.ZIP, .RAR, .7Z), avança direto para a foto de capa
+            if ext in (".zip", ".rar", ".7z"):
                 wizard["step"] = "WAIT_COVER"
+                pkg_type = ext.replace(".", "").upper()
+                count_str = f" — *{parts_count} peça(s) detectada(s)*" if parts_count > 1 else ""
                 await send_telegram_reply(
                     bot_token, chat_id,
-                    f"✅ *Pacote ZIP recebido!*\n"
-                    f"📁 `{file_name}` ({file_size/1024/1024:.2f} MB) — *{parts_count} peça(s) detectada(s)*.\n\n"
+                    f"✅ *Pacote {pkg_type} recebido!*\n"
+                    f"📁 `{file_name}` ({file_size/1024/1024:.2f} MB){count_str}.\n\n"
                     f"---\n"
                     f"🖼️ *Passo 2 de 5: Foto da Peça (Capa)*\n"
                     f"Envie agora a foto principal da peça (esta foto será a vitrine no catálogo)."
