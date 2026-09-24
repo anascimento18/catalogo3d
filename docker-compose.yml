@@ -21,6 +21,7 @@ services:
       - network_swarm_public
     volumes:
       - catalogo3d_data:/data
+      - telegram_bot_data:/var/lib/telegram-bot-api
     environment:
       - DATA_DIR=/data
       # Conexão com o PostgreSQL interno do Swarm
@@ -42,9 +43,10 @@ services:
       - EVOLUTION_KEY=4eddc4b3-5499-47a1-9b8b-d4afa9ad00e8
       - EVOLUTION_INSTANCE=andre
       
-      # Ingestão Automática via Telegram Bot
+      # Ingestão Automática via Telegram Bot (API Local até 2 GB)
       - TELEGRAM_BOT_TOKEN=8856055764:AAF5PxZzZ6y9GHgCGr-t6apEtQkPKFDfGsM
       - TELEGRAM_ADMIN_CHAT_ID=613898449,5370959021438146805
+      - TELEGRAM_API_SERVER=http://telegram-bot-api:8081
       
       # Performance e Logs em Tempo Real
       - PYTHONUNBUFFERED=1
@@ -70,8 +72,33 @@ services:
         - traefik.http.services.catalogo3d.loadbalancer.server.port=8000
         - traefik.http.services.catalogo3d.loadbalancer.passHostHeader=true
 
+  # Servidor Oficial da API do Telegram (Suporte a uploads e downloads de até 2.000 MB)
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    hostname: "{{.Service.Name}}.{{.Task.Slot}}"
+    environment:
+      - TELEGRAM_API_ID=20030224
+      - TELEGRAM_API_HASH=f18906f67faf98ee956f2550d53ef864
+      - TELEGRAM_LOCAL=1
+      - TELEGRAM_STAT=1
+    volumes:
+      - telegram_bot_data:/var/lib/telegram-bot-api
+    networks:
+      - network_swarm_public
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == worker02
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1024M
+
 volumes:
   catalogo3d_data:
+  telegram_bot_data:
 
 networks:
   network_swarm_public:

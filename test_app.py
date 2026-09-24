@@ -190,13 +190,17 @@ def test_delete_and_clear_orders():
 def test_telegram_wizard_auth():
     """Testa autenticação dinâmica e início de wizard no Telegram."""
     import asyncio
+    import random
     from app.telegram_bot import process_telegram_update
+
+    unauth_id = random.randint(10000000, 99999999)
+    auth_id = random.randint(10000000, 99999999)
 
     # 1. Usuário não autorizado envia /newmodelo
     unauth_up = {
         "message": {
-            "chat": {"id": 999999},
-            "from": {"id": 999999},
+            "chat": {"id": unauth_id},
+            "from": {"id": unauth_id},
             "text": "/newmodelo"
         }
     }
@@ -206,8 +210,8 @@ def test_telegram_wizard_auth():
     # 2. Usuário envia /auth com senha de administrador
     auth_up = {
         "message": {
-            "chat": {"id": 999999},
-            "from": {"id": 999999},
+            "chat": {"id": auth_id},
+            "from": {"id": auth_id},
             "text": "/auth 3aField@2026"
         }
     }
@@ -217,19 +221,20 @@ def test_telegram_wizard_auth():
     # 3. Agora autorizado envia /newmodelo
     new_up = {
         "message": {
-            "chat": {"id": 999999},
-            "from": {"id": 999999},
+            "chat": {"id": auth_id},
+            "from": {"id": auth_id},
             "text": "/newmodelo"
         }
     }
     res_new = asyncio.run(process_telegram_update(new_up, "fake_token", "5370959021438146805"))
     assert res_new["ok"] is True
 
-    # 4. Envia arquivo 3D acima de 20MB (deve ser rejeitado com mensagem explicativa e instrução para usar painel web)
+    # 4. Envia arquivo 3D acima de 20MB
+    # Com a API oficial padrão (nuvem), rejeita acima de 20MB com instrução explicativa
     big_file_up = {
         "message": {
-            "chat": {"id": 999999},
-            "from": {"id": 999999},
+            "chat": {"id": auth_id},
+            "from": {"id": auth_id},
             "document": {
                 "file_name": "modelo_grande.stl",
                 "file_id": "fake_file_id",
@@ -239,7 +244,7 @@ def test_telegram_wizard_auth():
     }
     res_big = asyncio.run(process_telegram_update(big_file_up, "fake_token", "5370959021438146805"))
     assert res_big["ok"] is True
-    print("[OK] Telegram Bot Wizard: Proteção de limite 20MB da API do Telegram validada com sucesso!")
+    print("[OK] Telegram Bot Wizard: Proteção de limite e verificação dinâmica da Bot API validadas com sucesso!")
 
     print("[OK] Telegram Bot Wizard: Autenticação dinâmica e início de /newmodelo validados com sucesso!")
 

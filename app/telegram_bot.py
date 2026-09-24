@@ -19,7 +19,9 @@ from app.config import (
     CATALOG_DOMAIN,
     ADMIN_PASSWORD,
     TELEGRAM_BOT_TOKEN,
-    TELEGRAM_ADMIN_CHAT_ID
+    TELEGRAM_ADMIN_CHAT_ID,
+    TELEGRAM_API_SERVER,
+    TELEGRAM_LOCAL_DIR
 )
 from app.database import SessionLocal, Model3D, Category
 
@@ -93,7 +95,7 @@ async def telegram_webhook_watchdog(bot_token: str, base_domain: str, interval_s
         try:
             await asyncio.sleep(interval_seconds)
             async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.get(f"https://api.telegram.org/bot{bot_token}/getWebhookInfo")
+                res = await client.get(f"{TELEGRAM_API_SERVER}/bot{bot_token}/getWebhookInfo")
                 if res.status_code == 200:
                     info = res.json().get("result", {})
                     curr_url = info.get("url", "")
@@ -118,7 +120,7 @@ async def setup_telegram_webhook(bot_token: str, base_domain: str):
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.post(
-                f"https://api.telegram.org/bot{bot_token}/setWebhook",
+                f"{TELEGRAM_API_SERVER}/bot{bot_token}/setWebhook",
                 json={
                     "url": webhook_url,
                     "allowed_updates": ["message", "callback_query"]
@@ -149,7 +151,7 @@ async def send_telegram_reply(bot_token: str, chat_id: int, text: str, reply_mar
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.post(
-                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                f"{TELEGRAM_API_SERVER}/bot{bot_token}/sendMessage",
                 json=payload
             )
             # Se o Telegram rejeitar devido a caracteres especiais de Markdown (ex: underscore em comandos ou nomes de arquivos)
@@ -163,7 +165,7 @@ async def send_telegram_reply(bot_token: str, chat_id: int, text: str, reply_mar
                 if reply_markup:
                     plain_payload["reply_markup"] = reply_markup
                 await client.post(
-                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    f"{TELEGRAM_API_SERVER}/bot{bot_token}/sendMessage",
                     json=plain_payload
                 )
     except Exception as e:
@@ -179,21 +181,22 @@ async def answer_callback_query(bot_token: str, callback_query_id: str, text: Op
         payload["text"] = text
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery", json=payload)
+            await client.post(f"{TELEGRAM_API_SERVER}/bot{bot_token}/answerCallbackQuery", json=payload)
     except Exception as e:
         logger.error(f"Erro ao responder callback query no Telegram: {e}")
 
 
 async def download_telegram_file(bot_token: str, file_id: str, dest_path: Path) -> tuple[bool, str]:
     """
-    Baixa um arquivo dos servidores do Telegram para o disco local com streaming em chunks.
+    Baixa um arquivo do Telegram para o disco local com suporte a API local (cópia direta instantânea)
+    ou streaming em chunks (suporte a arquivos gigantes até 2 GB).
     Retorna (sucesso, mensagem_ou_erro).
     """
     try:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        timeout_config = httpx.Timeout(connect=20.0, read=180.0, write=60.0, pool=30.0)
+        timeout_config = httpx.Timeout(connect=30.0, read=600.0, write=120.0, pool=30.0)
         async with httpx.AsyncClient(timeout=timeout_config) as client:
-            res = await client.get(f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}")
+            res = await client.get(f"{TELEGRAM_API_SERVER}/bot{bot_token}/getFile?file_id={file_id}")
             res_data = res.json()
             if not res_data.get("ok"):
                 err_desc = res_data.get("description", "Erro ao obter informações do arquivo no Telegram")
@@ -204,17 +207,29 @@ async def download_telegram_file(bot_token: str, file_id: str, dest_path: Path) 
             if not file_path_on_tg:
                 return False, "Caminho do arquivo não fornecido pelo Telegram"
 
-            download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path_on_tg}"
+            # 1. Se o servidor local do Telegram estiver em volume compartilhado, copia diretamente sem tráfego de rede!
+            local_direct_path = Path(file_path_on_tg)
+            if local_direct_path.is_file():
+                shutil.copyfile(local_direct_path, dest_path)
+                return True, "Sucesso"
+            
+            shared_vol_path = TELEGRAM_LOCAL_DIR / file_path_on_tg
+            if shared_vol_path.is_file():
+                shutil.copyfile(shared_vol_path, dest_path)
+                return True, "Sucesso"
+
+            # 2. Caso contrário, faz stream via HTTP pelo servidor da Bot API
+            download_url = f"{TELEGRAM_API_SERVER}/file/bot{bot_token}/{file_path_on_tg}"
             async with client.stream("GET", download_url) as file_res:
                 if file_res.status_code != 200:
                     return False, f"Servidor do Telegram retornou HTTP {file_res.status_code}"
                 with open(dest_path, "wb") as f:
-                    async for chunk in file_res.aiter_bytes(chunk_size=65536):
+                    async for chunk in file_res.aiter_bytes(chunk_size=131072):
                         f.write(chunk)
             return True, "Sucesso"
     except httpx.ReadTimeout:
-        logger.error(f"Timeout ao baixar arquivo {file_id} do Telegram (>180s)")
-        return False, "Tempo limite esgotado ao baixar o arquivo dos servidores do Telegram (>180s)"
+        logger.error(f"Timeout ao baixar arquivo {file_id} do Telegram (>600s)")
+        return False, "Tempo limite esgotado ao baixar o arquivo dos servidores do Telegram (>600s)"
     except Exception as e:
         logger.error(f"Erro ao baixar arquivo {file_id} do Telegram: {e}")
         return False, str(e)
@@ -355,6 +370,9 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             "description": ""
         }
 
+        is_local_api = "api.telegram.org" not in TELEGRAM_API_SERVER
+        limit_desc = "2.000 MB (2 GB)" if is_local_api else "20 MB"
+
         await send_telegram_reply(
             bot_token, chat_id,
             "🚀 *Cadastro de Novo Modelo 3D (Passo 1 de 5)*\n\n"
@@ -362,7 +380,7 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
             "• Envie o arquivo `.STL`, `.3MF`, `.STEP`, `.OBJ` ou `.ZIP`\n"
             "• **OU cole o link do site/personalizador** (ex: MakerWorld, Thingiverse, Cults3D, etc.)\n\n"
             "💡 *Dicas:*\n"
-            "• **Limite do Telegram:** A API do Telegram permite download de arquivos de até **20 MB**. Se o seu arquivo for maior que 20MB, você pode cadastrar pelo painel web: `catalogo3d.3afieldservice.com.br/admin` (onde aceita até 500 MB).\n"
+            f"• **Limite de Arquivo:** O assistente aceita arquivos e pacotes de até **{limit_desc}**!\n"
             "• **Personalizador Web:** Se você colar o link do site agora, você não precisa enviar o arquivo físico!"
         )
         return {"ok": True}
@@ -435,19 +453,17 @@ async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: O
                 return {"ok": True}
 
             file_size_bytes = document.get("file_size", 0)
-            if file_size_bytes and file_size_bytes > 20 * 1024 * 1024:
+            is_local_api = "api.telegram.org" not in TELEGRAM_API_SERVER
+            max_tg_size = 2000 * 1024 * 1024 if is_local_api else 20 * 1024 * 1024
+            if file_size_bytes and file_size_bytes > max_tg_size:
                 size_mb = file_size_bytes / (1024 * 1024)
                 await send_telegram_reply(
                     bot_token, chat_id,
-                    f"⚠️ *Arquivo muito grande para o Telegram ({size_mb:.1f} MB)*\n\n"
-                    f"A API oficial de Bots do Telegram impõe um limite de **20 MB** para download de arquivos pelo chat.\n\n"
+                    f"⚠️ *Arquivo muito grande ({size_mb:.1f} MB)*\n\n"
+                    f"O limite máximo aceito pelo bot é de **{'2.000 MB (2 GB)' if is_local_api else '20 MB'}**.\n\n"
                     f"💡 *Como publicar este modelo:*\n"
-                    f"1️⃣ **Pelo Painel Web (Recomendado):**\n"
-                    f"Acesse diretamente pelo navegador:\n"
-                    f"🌐 `{CATALOG_DOMAIN}/admin`\n"
-                    f"_(O painel web aceita arquivos .ZIP ou .STL de até 500 MB sem limite do Telegram!)_\n\n"
-                    f"2️⃣ **Ou envie as peças .STL separadamente aqui:**\n"
-                    f"Se o seu arquivo for um `.ZIP` com várias peças, envie os arquivos `.STL` individuais um a um aqui no chat (cada um abaixo de 20 MB). O assistente junta todos automaticamente em um único pacote!"
+                    f"Faça o upload diretamente pelo navegador no painel web:\n"
+                    f"🌐 `{CATALOG_DOMAIN}/admin`"
                 )
                 return {"ok": True}
 
