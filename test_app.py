@@ -329,8 +329,10 @@ if __name__ == "__main__":
 
     # Teste do Agente IA MiniMax no Telegram Bot
     from test_ai_bot_flow import test_full_ai_bot_workflow
+    from test_deduplication import test_photo_deduplication_and_ghost_rejection
     import asyncio
     asyncio.run(test_full_ai_bot_workflow())
+    asyncio.run(test_photo_deduplication_and_ghost_rejection())
 
     print("\nTODOS OS TESTES DE SEGURANÇA E FUNCIONALIDADES PASSARAM COM SUCESSO!")
 

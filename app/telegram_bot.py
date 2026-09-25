@@ -5,6 +5,7 @@ import shutil
 import zipfile
 import logging
 import asyncio
+import hashlib
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import httpx
@@ -134,10 +135,13 @@ async def setup_telegram_webhook(bot_token: str, base_domain: str):
         logger.error(f"Erro ao configurar webhook do Telegram: {e}")
 
 
-async def send_telegram_reply(bot_token: str, chat_id: int, text: str, reply_markup: Optional[dict] = None):
-    """Envia mensagem de texto formatada com suporte a botões inline e fallback automático para texto plano."""
+async def send_telegram_reply(bot_token: str, chat_id: int, text: str, reply_markup: Optional[dict] = None) -> Optional[int]:
+    """
+    Envia mensagem de texto formatada com suporte a botões inline e fallback automático para texto plano.
+    Retorna o message_id gerado no Telegram se bem-sucedido.
+    """
     if not bot_token or not chat_id:
-        return
+        return None
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -153,21 +157,45 @@ async def send_telegram_reply(bot_token: str, chat_id: int, text: str, reply_mar
                 f"{TELEGRAM_API_SERVER}/bot{bot_token}/sendMessage",
                 json=payload
             )
-            if res.status_code != 200 or not res.json().get("ok"):
-                logger.warning(f"Aviso ao enviar markdown ({res.text}). Reenviando em texto plano...")
-                plain_payload = {
-                    "chat_id": chat_id,
-                    "text": text.replace("*", "").replace("_", "").replace("`", ""),
-                    "disable_web_page_preview": False
-                }
-                if reply_markup:
-                    plain_payload["reply_markup"] = reply_markup
-                await client.post(
-                    f"{TELEGRAM_API_SERVER}/bot{bot_token}/sendMessage",
-                    json=plain_payload
-                )
+            if res.status_code == 200 and res.json().get("ok"):
+                return res.json().get("result", {}).get("message_id")
+            
+            # Se o Telegram rejeitar devido a caracteres especiais do Markdown
+            logger.warning(f"Aviso ao enviar markdown ({res.text}). Reenviando em texto plano...")
+            plain_payload = {
+                "chat_id": chat_id,
+                "text": text.replace("*", "").replace("_", "").replace("`", ""),
+                "disable_web_page_preview": False
+            }
+            if reply_markup:
+                plain_payload["reply_markup"] = reply_markup
+            plain_res = await client.post(
+                f"{TELEGRAM_API_SERVER}/bot{bot_token}/sendMessage",
+                json=plain_payload
+            )
+            if plain_res.status_code == 200 and plain_res.json().get("ok"):
+                return plain_res.json().get("result", {}).get("message_id")
     except Exception as e:
         logger.error(f"Erro ao responder no Telegram (chat {chat_id}): {e}")
+    return None
+
+
+async def remove_inline_keyboard(bot_token: str, chat_id: int, message_id: int):
+    """Desativa os botões inline de uma mensagem para evitar duplos cliques e propostas fantasmas."""
+    if not bot_token or not chat_id or not message_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{TELEGRAM_API_SERVER}/bot{bot_token}/editMessageReplyMarkup",
+                json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "reply_markup": {"inline_keyboard": []}
+                }
+            )
+    except Exception as e:
+        logger.debug(f"Aviso ao desativar botões inline (mensagem {message_id}): {e}")
 
 
 async def answer_callback_query(bot_token: str, callback_query_id: str, text: Optional[str] = None):
@@ -263,7 +291,8 @@ def _get_or_create_wizard(chat_id: int) -> dict:
             "reasoning": "",
             "is_featured": False,
             "order_count": 18,
-            "description": ""
+            "description": "",
+            "proposal_message_id": None
         }
     return USER_WIZARDS[chat_id]
 
@@ -274,7 +303,6 @@ async def send_proposal_card(bot_token: str, chat_id: int, wizard: dict):
     show_price = wizard.get("show_price", True)
     price_display = f"R$ {price_val:.2f}" if (show_price and price_val > 0) else "Sob Consulta"
     price_range = wizard.get("price_range", "")
-    range_info = f" _(Faixa de mercado: {price_range})_" if price_range else ""
 
     total_3d = len(wizard.get("files_3d", []))
     if not wizard.get("files_3d") and wizard.get("external_url"):
@@ -288,17 +316,19 @@ async def send_proposal_card(bot_token: str, chat_id: int, wizard: dict):
 
     photos_count = 1 + len(wizard.get("gallery_imgs", []))
 
+    teto_info = f"\n📊 *Faixa / Teto de Mercado:* {price_range}" if price_range else ""
+
     card_text = (
         f"✨ *Proposta Inteligente de Publicação* 🤖\n\n"
         f"🏷️ *Título Comercial:* {wizard['title']}\n"
         f"📂 *Categoria:* {wizard['category_name']}\n"
-        f"💰 *Preço Sugerido:* *{price_display}*{range_info}\n"
+        f"💰 *Preço Sugerido (15% abaixo do teto):* *{price_display}*{teto_info}\n"
         f"📁 *Arquivo 3D:* {origin_str}\n"
         f"🖼️ *Fotos da Vitrine:* {photos_count} foto(s)\n\n"
         f"📝 *Descrição de Venda:*\n"
         f"_{wizard['description']}_\n\n"
-        f"💡 *Análise da IA MiniMax:*\n"
-        f"_{wizard.get('reasoning', 'Preço e título otimizados com base em tendências de impressão 3D no Brasil.')}_\n\n"
+        f"💡 *Estratégia de Precificação:*\n"
+        f"_{wizard.get('reasoning', 'Preço calculado estrategicamente 10% a 15% abaixo do teto de mercado para máxima margem de estúdio premium.')}_\n\n"
         f"👇 _Aprove em 1 clique ou personalize o que desejar:_"
     )
 
@@ -324,7 +354,9 @@ async def send_proposal_card(bot_token: str, chat_id: int, wizard: dict):
         ]
     }
 
-    await send_telegram_reply(bot_token, chat_id, card_text, reply_markup=keyboard)
+    msg_id = await send_telegram_reply(bot_token, chat_id, card_text, reply_markup=keyboard)
+    if msg_id:
+        wizard["proposal_message_id"] = msg_id
 
 
 async def trigger_ai_proposal(bot_token: str, chat_id: int, wizard: dict, caption: str = ""):
@@ -337,7 +369,7 @@ async def trigger_ai_proposal(bot_token: str, chat_id: int, wizard: dict, captio
 
     await send_telegram_reply(
         bot_token, chat_id,
-        "🤖 *Analisando peça com IA e pesquisando referências de mercado no Brasil...* 🔍"
+        "🤖 *Analisando peça com IA e pesquisando referências de topo de mercado no Brasil...* 🔍"
     )
 
     db = SessionLocal()
@@ -356,7 +388,7 @@ async def trigger_ai_proposal(bot_token: str, chat_id: int, wizard: dict, captio
 
     cover_path = wizard["cover_img"]["path"] if wizard.get("cover_img") else None
 
-    # Chama IA MiniMax
+    # Chama IA MiniMax com regra de teto -15%
     ai_result = await analyze_model_proposal(
         image_path=cover_path,
         filename=main_filename,
@@ -368,7 +400,7 @@ async def trigger_ai_proposal(bot_token: str, chat_id: int, wizard: dict, captio
     wizard["title"] = ai_result.get("title", "Modelo Decorativo 3D")
     wizard["category_name"] = ai_result.get("category", "Decoração & Casa")
     wizard["description"] = ai_result.get("description", "")
-    wizard["price"] = float(ai_result.get("suggested_price", 45.0))
+    wizard["price"] = float(ai_result.get("suggested_price", 75.0))
     wizard["show_price"] = True
     wizard["price_range"] = ai_result.get("price_range", "")
     wizard["reasoning"] = ai_result.get("reasoning", "")
@@ -389,7 +421,21 @@ async def trigger_ai_proposal(bot_token: str, chat_id: int, wizard: dict, captio
 
 
 async def finalize_and_publish(bot_token: str, chat_id: int, wizard: dict, with_price: bool = True):
-    """Grava arquivos permanentemente e publica o modelo no banco de dados."""
+    """Grava arquivos permanentemente e publica o modelo no banco de dados com blindagem total contra fantasmas."""
+    
+    # 0. Blindagem estrita contra modelos vazios / fantasmas
+    has_3d = bool(wizard.get("files_3d") or wizard.get("external_url"))
+    has_cover = bool(wizard.get("cover_img"))
+    has_title = bool(wizard.get("title") and str(wizard.get("title")).strip())
+
+    if not has_title or not has_3d or not has_cover:
+        logger.warning(f"Tentativa de publicação descartada para chat {chat_id}: rascunho inválido ou já processado.")
+        await send_telegram_reply(
+            bot_token, chat_id,
+            "⚠️ *Esta proposta já foi concluída ou expirou!*\n\nEnvie o arquivo 3D e uma foto da peça para iniciar um novo cadastro."
+        )
+        return
+
     await send_telegram_reply(bot_token, chat_id, "⏳ Publicando modelo e gravando arquivos no catálogo...")
 
     unique_id = uuid.uuid4().hex[:8]
@@ -407,7 +453,7 @@ async def finalize_and_publish(bot_token: str, chat_id: int, wizard: dict, with_
     else:
         saved_cover_name = "default_3d_cover.png"
 
-    # 2. Galeria de fotos
+    # 2. Galeria de fotos adicionais (apenas fotos reais que não sejam idênticas à capa)
     saved_gallery_names = []
     for idx, g_info in enumerate(wizard.get("gallery_imgs", [])):
         if Path(g_info["path"]).is_file():
@@ -478,7 +524,7 @@ async def finalize_and_publish(bot_token: str, chat_id: int, wizard: dict, with_
     finally:
         db.close()
 
-    # Limpa temporários
+    # Limpa temporários e remove rascunho da memória
     shutil.rmtree(wizard["temp_dir"], ignore_errors=True)
     del USER_WIZARDS[chat_id]
 
@@ -500,7 +546,7 @@ async def finalize_and_publish(bot_token: str, chat_id: int, wizard: dict, with_
 
 async def process_telegram_update(update: dict, bot_token: str, admin_chat_id: Optional[str] = None) -> dict:
     """
-    Ponto de entrada de atualizações do Telegram com proteção de duplicatas
+    Ponto de entrada de atualizações do Telegram com proteção estrita de duplicatas
     e serialização por chat.
     """
     update_id = update.get("update_id")
@@ -543,11 +589,13 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
     document = None
     photos = None
     callback_data = None
+    msg_id = None
 
     if callback_query:
         from_user = callback_query.get("from", {})
         user_id = str(from_user.get("id", ""))
         message = callback_query.get("message", {})
+        msg_id = message.get("message_id")
         chat_id = message.get("chat", {}).get("id")
         callback_data = callback_query.get("data", "")
         await answer_callback_query(bot_token, callback_query.get("id"))
@@ -555,6 +603,7 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
         from_user = message.get("from", {})
         user_id = str(from_user.get("id", ""))
         chat_id = message.get("chat", {}).get("id")
+        msg_id = message.get("message_id")
         text = str(message.get("text") or message.get("caption") or "").strip()
         document = message.get("document")
         photos = message.get("photo")
@@ -617,9 +666,9 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
             "1️⃣ *Envie ou encaminhe o arquivo 3D* (`.STL`, `.3MF`, `.ZIP`, `.RAR`) ou link do modelo;\n"
             "2️⃣ *Envie a foto da peça* impressa;\n\n"
             "✨ *O que a IA faz por você:*\n"
-            "• Cria um título comercial chamativo em português (nada de nomes feios de arquivo);\n"
-            "• Pesquisa referências de preços no mercado brasileiro (Shopee / Mercado Livre);\n"
-            "• Sugere o preço justo de venda e escreve a descrição persuasiva;\n"
+            "• Cria um título comercial chamativo em português;\n"
+            "• Pesquisa referências de topo de mercado no Brasil;\n"
+            "• Sugere o preço com 10% a 15% de desconto sobre o teto de mercado (estúdio premium);\n"
             "• Apresenta uma proposta para você **aprovar em 1 clique** ou personalizar!\n\n"
             "🚀 *Comandos:*\n"
             "👉 /newmodelo - Iniciar novo rascunho\n"
@@ -663,23 +712,38 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
         )
         return {"ok": True}
 
-    wizard = _get_or_create_wizard(chat_id)
-
     # =========================================================================
     # 5. Tratamento de Botões Inline (Callbacks)
     # =========================================================================
     if callback_data:
-        # APROVAÇÃO E PUBLICAÇÃO
-        if callback_data == "ai_approve_price":
-            await finalize_and_publish(bot_token, chat_id, wizard, with_price=True)
+        # Se não há wizard ativo para o chat, o botão clicado é antigo/expirado
+        if chat_id not in USER_WIZARDS:
+            if msg_id:
+                await remove_inline_keyboard(bot_token, chat_id, msg_id)
+            await send_telegram_reply(
+                bot_token, chat_id,
+                "⚠️ *Esta proposta já foi concluída ou expirou!*\n\nEnvie um novo arquivo 3D e uma foto da peça para cadastrar outro modelo."
+            )
             return {"ok": True}
 
-        if callback_data == "ai_approve_quote":
-            await finalize_and_publish(bot_token, chat_id, wizard, with_price=False)
+        wizard = USER_WIZARDS[chat_id]
+
+        # APROVAÇÃO E PUBLICAÇÃO
+        if callback_data in ("ai_approve_price", "ai_approve_quote"):
+            # Desativa os botões da mensagem do Telegram imediatamente
+            if msg_id:
+                await remove_inline_keyboard(bot_token, chat_id, msg_id)
+            elif wizard.get("proposal_message_id"):
+                await remove_inline_keyboard(bot_token, chat_id, wizard["proposal_message_id"])
+
+            with_price = (callback_data == "ai_approve_price")
+            await finalize_and_publish(bot_token, chat_id, wizard, with_price=with_price)
             return {"ok": True}
 
         # CANCELAR
         if callback_data == "ai_cancel":
+            if msg_id:
+                await remove_inline_keyboard(bot_token, chat_id, msg_id)
             shutil.rmtree(wizard["temp_dir"], ignore_errors=True)
             del USER_WIZARDS[chat_id]
             await send_telegram_reply(bot_token, chat_id, "❌ Cadastro cancelado com sucesso. Arquivos descartados.")
@@ -763,6 +827,8 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
             await send_proposal_card(bot_token, chat_id, wizard)
             return {"ok": True}
 
+    wizard = _get_or_create_wizard(chat_id)
+
     # =========================================================================
     # 6. Estados de Edição Manual de Campos
     # =========================================================================
@@ -809,18 +875,19 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
             return {"ok": True}
 
     # =========================================================================
-    # 8. Recebimento de Imagens (Capa ou Galeria)
+    # 8. Recebimento de Imagens (Blindagem Total contra Duplicação)
     # =========================================================================
     is_img_doc = bool(document) and Path(document.get("file_name", "")).suffix.lower() in ALLOWED_IMG_EXTENSIONS
     if photos or is_img_doc:
+        file_unique_id = ""
         if photos:
             img_file_id = photos[-1].get("file_id")
+            file_unique_id = photos[-1].get("file_unique_id", "")
             img_name = f"foto_{uuid.uuid4().hex[:6]}.jpg"
         else:
             img_file_id = document.get("file_id")
+            file_unique_id = document.get("file_unique_id", "")
             img_name = document.get("file_name") or f"foto_{uuid.uuid4().hex[:6]}.jpg"
-
-        await send_telegram_reply(bot_token, chat_id, f"⏳ Baixando foto...")
 
         target_img = wizard["temp_dir"] / img_name
         success, err = await download_telegram_file(bot_token, img_file_id, target_img)
@@ -828,9 +895,19 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
             await send_telegram_reply(bot_token, chat_id, f"❌ Falha ao baixar imagem: {err}")
             return {"ok": False}
 
-        # Primeira foto se torna a capa principal
+        # Calcula hash MD5 do arquivo baixado para garantir unicidade absoluta
+        img_bytes = target_img.read_bytes()
+        img_hash = hashlib.md5(img_bytes).hexdigest()
+
+        # 1. Primeira foto se torna a capa principal
         if not wizard.get("cover_img"):
-            wizard["cover_img"] = {"name": img_name, "path": target_img}
+            wizard["cover_img"] = {
+                "name": img_name,
+                "path": target_img,
+                "file_id": img_file_id,
+                "file_unique_id": file_unique_id,
+                "hash": img_hash
+            }
             # Se já possuímos arquivo 3D ou link, ativa a IA!
             if wizard.get("files_3d") or wizard.get("external_url"):
                 await trigger_ai_proposal(bot_token, chat_id, wizard, caption=text)
@@ -842,8 +919,33 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
                 )
             return {"ok": True}
         else:
-            # Fotos subsequentes são adicionadas à galeria
-            wizard["gallery_imgs"].append({"name": img_name, "path": target_img})
+            # 2. Já existe capa -> Verifica se esta foto é DUPLICADA da capa!
+            cover = wizard["cover_img"]
+            is_dup_cover = (
+                (file_unique_id and file_unique_id == cover.get("file_unique_id")) or
+                (img_file_id and img_file_id == cover.get("file_id")) or
+                (img_hash and img_hash == cover.get("hash"))
+            )
+            if is_dup_cover:
+                logger.info(f"Foto duplicada da capa ignorada para chat {chat_id} (hash {img_hash}).")
+                target_img.unlink(missing_ok=True)
+                return {"ok": True}
+
+            # 3. Verifica se esta foto já existe na galeria
+            for g in wizard.get("gallery_imgs", []):
+                if (file_unique_id and file_unique_id == g.get("file_unique_id")) or (img_hash and img_hash == g.get("hash")):
+                    logger.info(f"Foto idêntica já existente na galeria ignorada para chat {chat_id} (hash {img_hash}).")
+                    target_img.unlink(missing_ok=True)
+                    return {"ok": True}
+
+            # 4. Foto extra legítima adicionada à galeria
+            wizard["gallery_imgs"].append({
+                "name": img_name,
+                "path": target_img,
+                "file_id": img_file_id,
+                "file_unique_id": file_unique_id,
+                "hash": img_hash
+            })
             total_gal = 1 + len(wizard["gallery_imgs"])
             if wizard.get("step") == "PROPOSAL":
                 await send_telegram_reply(bot_token, chat_id, f"📸 *Foto extra adicionada!* (Total de {total_gal} fotos para a vitrine).")
