@@ -3,9 +3,28 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, D
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from app.config import DATABASE_URL, ADMIN_USERNAME, ADMIN_PASSWORD
 
-# Configuração do Engine
-connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
+# Configuração do Engine com Normalização de Dialeto PostgreSQL
+db_url = DATABASE_URL
+connect_args = {"check_same_thread": False} if "sqlite" in db_url else {}
+
+if "sqlite" not in db_url:
+    # Corrige prefixo legado postgres://
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    
+    # Se o driver não foi explicitado (ex: postgresql://user:pass@host:5432/db)
+    if db_url.startswith("postgresql://") and not db_url.startswith("postgresql+"):
+        try:
+            import psycopg2
+            db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        except ImportError:
+            try:
+                import psycopg
+                db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+            except ImportError:
+                pass
+
+engine = create_engine(db_url, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
