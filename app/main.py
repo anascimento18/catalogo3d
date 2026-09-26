@@ -80,6 +80,11 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    path = request.url.path
+    if path.startswith("/admin") or "admin.js" in path or "admin.html" in path:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 # Monta arquivos estáticos
@@ -108,7 +113,14 @@ def serve_admin(request: Request):
     token = request.cookies.get("admin_session")
     if not token or not verify_session_token(token):
         return RedirectResponse(url=ADMIN_ROUTE, status_code=303)
-    return FileResponse(STATIC_DIR / "admin.html")
+    return FileResponse(
+        STATIC_DIR / "admin.html",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
 
 
 # ==========================================
