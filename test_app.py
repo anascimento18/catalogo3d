@@ -331,10 +331,13 @@ if __name__ == "__main__":
     from test_ai_bot_flow import test_full_ai_bot_workflow
     from test_deduplication import test_photo_deduplication_and_ghost_rejection
     from test_bulk_delete import test_bulk_delete_endpoint
+    from test_pdf_support import test_web_admin_pdf_bundle_upload_and_download, test_telegram_bot_pdf_and_3d_workflow
     import asyncio
     asyncio.run(test_full_ai_bot_workflow())
     asyncio.run(test_photo_deduplication_and_ghost_rejection())
     test_bulk_delete_endpoint()
+    test_web_admin_pdf_bundle_upload_and_download()
+    asyncio.run(test_telegram_bot_pdf_and_3d_workflow())
 
     print("\nTODOS OS TESTES DE SEGURANÇA E FUNCIONALIDADES PASSARAM COM SUCESSO!")
 

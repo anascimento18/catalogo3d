@@ -478,7 +478,8 @@ async def upload_model(
                 zf.write(p_path, arcname=p_orig_name)
 
         file_size = target_zip.stat().st_size
-        parts_count = len(parts_metadata)
+        real_parts = [f for f in parts_metadata if not f["name"].lower().endswith(".pdf")]
+        parts_count = len(real_parts) if real_parts else len(parts_metadata)
         format_str = "BUNDLE ZIP"
 
     new_model = Model3D(

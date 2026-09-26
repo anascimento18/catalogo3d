@@ -41,6 +41,6 @@ MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "MiniMax-M3")
 
 
 # Formatos suportados
-ALLOWED_3D_EXTENSIONS = {".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs", ".fbx", ".gltf", ".glb", ".blend", ".scad", ".zip", ".rar", ".7z"}
+ALLOWED_3D_EXTENSIONS = {".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs", ".fbx", ".gltf", ".glb", ".blend", ".scad", ".zip", ".rar", ".7z", ".pdf"}
 ALLOWED_IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 

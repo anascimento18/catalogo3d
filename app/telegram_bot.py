@@ -304,15 +304,24 @@ async def send_proposal_card(bot_token: str, chat_id: int, wizard: dict):
     price_display = f"R$ {price_val:.2f}" if (show_price and price_val > 0) else "Sob Consulta"
     price_range = wizard.get("price_range", "")
 
-    total_3d = len(wizard.get("files_3d", []))
-    if not wizard.get("files_3d") and wizard.get("external_url"):
+    files_3d = wizard.get("files_3d", [])
+    has_pdf = any(f["name"].lower().endswith(".pdf") for f in files_3d)
+    pdf_count = len([f for f in files_3d if f["name"].lower().endswith(".pdf")])
+    pieces_3d_count = len([f for f in files_3d if not f["name"].lower().endswith(".pdf")])
+
+    if not files_3d and wizard.get("external_url"):
         origin_str = f"🔗 Link: `{wizard['external_url']}`"
-    elif total_3d == 1:
-        f = wizard["files_3d"][0]
+    elif len(files_3d) == 1:
+        f = files_3d[0]
         size_mb = f.get("size", 0) / (1024 * 1024)
-        origin_str = f"`{f['name']}` ({size_mb:.1f} MB)"
+        if f["name"].lower().endswith(".pdf"):
+            origin_str = f"📄 `{f['name']}` ({size_mb:.1f} MB)"
+        else:
+            origin_str = f"`{f['name']}` ({size_mb:.1f} MB)"
     else:
-        origin_str = f"{total_3d} arquivos 3D agrupados"
+        parts_text = f"{pieces_3d_count} peça(s) 3D" if pieces_3d_count else ""
+        pdf_text = f"+ {pdf_count} manual PDF" if pdf_count else ""
+        origin_str = f"📦 {parts_text} {pdf_text} (compactados em .ZIP)".strip()
 
     photos_count = 1 + len(wizard.get("gallery_imgs", []))
 
@@ -380,9 +389,10 @@ async def trigger_ai_proposal(bot_token: str, chat_id: int, wizard: dict, captio
     finally:
         db.close()
 
-    # Identifica nome principal
+    # Identifica nome principal (prioriza arquivo 3D em vez do manual PDF para nomear a peça)
     if wizard.get("files_3d"):
-        main_filename = wizard["files_3d"][0]["name"]
+        non_pdf = [f["name"] for f in wizard["files_3d"] if not f["name"].lower().endswith(".pdf")]
+        main_filename = non_pdf[0] if non_pdf else wizard["files_3d"][0]["name"]
     else:
         main_filename = wizard.get("external_url") or "modelo.stl"
 
@@ -480,14 +490,16 @@ async def finalize_and_publish(bot_token: str, chat_id: int, wizard: dict, with_
         total_size = f_3d.get("size", 0)
         files_3d_list_json = json.dumps([{"name": f_3d["name"], "size": f_3d["size"]}])
     else:
-        # Múltiplas peças -> Compacta em .ZIP
+        # Múltiplas peças e/ou Peças + Manual PDF -> Compacta em .ZIP
         saved_3d_name = f"{clean_title}_{unique_id}.zip"
         target_3d = MODEL_DIR / saved_3d_name
         with zipfile.ZipFile(target_3d, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
             for item in wizard.get("files_3d", []):
                 if Path(item["path"]).is_file():
                     zf.write(item["path"], arcname=item["name"])
-        parts_count = len(wizard.get("files_3d", []))
+        # Contagem de peças físicas (exclui PDFs da contagem de peças de impressão)
+        real_parts = [f for f in wizard.get("files_3d", []) if not f["name"].lower().endswith(".pdf")]
+        parts_count = len(real_parts) if real_parts else 1
         format_str = "ZIP"
         total_size = target_3d.stat().st_size if target_3d.exists() else 0
         files_3d_list_json = json.dumps([{"name": f["name"], "size": f["size"]} for f in wizard.get("files_3d", [])])
@@ -530,6 +542,7 @@ async def finalize_and_publish(bot_token: str, chat_id: int, wizard: dict, with_
 
     total_photos = 1 + len(saved_gallery_names)
     price_label = f"R$ {final_price:.2f}" if show_price_flag else "Sob Consulta"
+    has_pdf_info = " (com Manual em PDF)" if any(f.get("name", "").lower().endswith(".pdf") for f in wizard.get("files_3d", [])) else ""
 
     await send_telegram_reply(
         bot_token, chat_id,
@@ -539,7 +552,7 @@ async def finalize_and_publish(bot_token: str, chat_id: int, wizard: dict, with_
         f"• Valor: *{price_label}*\n"
         f"• Categoria: {wizard['category_name']}\n"
         f"• Fotos cadastradas: {total_photos}\n"
-        f"• Peças 3D: {parts_count}\n\n"
+        f"• Peças 3D: {parts_count}{has_pdf_info}\n\n"
         f"👉 [Visualizar na Vitrine Online]({CATALOG_DOMAIN})"
     )
 
@@ -663,7 +676,7 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
             bot_token, chat_id,
             "🤖 *Assistente Studio 3D com IA MiniMax* ✨\n\n"
             "Cadastrar novas peças agora é super prático e inteligente:\n\n"
-            "1️⃣ *Envie ou encaminhe o arquivo 3D* (`.STL`, `.3MF`, `.ZIP`, `.RAR`) ou link do modelo;\n"
+            "1️⃣ *Envie ou encaminhe o arquivo 3D* (`.STL`, `.3MF`, `.ZIP`, `.RAR`), manual de montagem (`.PDF`) ou link do modelo;\n"
             "2️⃣ *Envie a foto da peça* impressa;\n\n"
             "✨ *O que a IA faz por você:*\n"
             "• Cria um título comercial chamativo em português;\n"
@@ -706,7 +719,7 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
         await send_telegram_reply(
             bot_token, chat_id,
             "🚀 *Novo Cadastro com IA Iniciado!*\n\n"
-            "📁 *Envie o Arquivo 3D* (`.STL`, `.3MF`, `.ZIP`, `.RAR`) **OU cole o link** do modelo;\n"
+            "📁 *Envie o Arquivo 3D* (`.STL`, `.3MF`, `.ZIP`, `.RAR`), manual de montagem (`.PDF`) **OU cole o link** do modelo;\n"
             "🖼️ E envie a **foto da peça** (pode mandar juntos ou um depois do outro).\n\n"
             f"💡 _Suporte a arquivos de até {limit_desc}!_"
         )
@@ -966,7 +979,7 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
         if ext not in ALLOWED_3D_EXTENSIONS:
             await send_telegram_reply(
                 bot_token, chat_id,
-                f"⚠️ O formato `{ext}` não é reconhecido. Envie arquivos 3D (`.STL`, `.3MF`, `.OBJ`, `.ZIP`, `.RAR`) ou fotos (`.JPG`, `.PNG`)."
+                f"⚠️ O formato `{ext}` não é reconhecido. Envie arquivos 3D (`.STL`, `.3MF`, `.OBJ`, `.ZIP`, `.RAR`), manual (`.PDF`) ou fotos (`.JPG`, `.PNG`)."
             )
             return {"ok": True}
 
@@ -1004,7 +1017,7 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
         if ext == ".zip":
             try:
                 with zipfile.ZipFile(target_file, "r") as zf:
-                    pieces = [n for n in zf.namelist() if any(n.lower().endswith(e) for e in ALLOWED_3D_EXTENSIONS)]
+                    pieces = [n for n in zf.namelist() if any(n.lower().endswith(e) for e in ALLOWED_3D_EXTENSIONS if e != ".pdf")]
                     if pieces:
                         parts_count = len(pieces)
             except Exception:
@@ -1025,11 +1038,18 @@ async def _dispatch_telegram_update(update: dict, bot_token: str, admin_chat_id:
         if wizard.get("cover_img"):
             await trigger_ai_proposal(bot_token, chat_id, wizard, caption=text)
         else:
-            await send_telegram_reply(
-                bot_token, chat_id,
-                f"✅ *Arquivo 3D recebido:* `{file_name}` ({size_mb:.1f} MB){pkg_info}!\n\n"
-                f"🖼️ *Agora envie a foto da peça impressa* para a IA analisar o visual e gerar a proposta completa!"
-            )
+            if ext == ".pdf":
+                await send_telegram_reply(
+                    bot_token, chat_id,
+                    f"📄 *Manual de Montagem em PDF recebido:* `{file_name}` ({size_mb:.1f} MB)!\nEle será empacotado junto aos arquivos de impressão 3D.\n\n"
+                    f"👉 Agora envie os **arquivos 3D** (`.STL`, `.3MF`, `.ZIP`) e a **foto da peça**!"
+                )
+            else:
+                await send_telegram_reply(
+                    bot_token, chat_id,
+                    f"✅ *Arquivo 3D recebido:* `{file_name}` ({size_mb:.1f} MB){pkg_info}!\n\n"
+                    f"🖼️ *Agora envie a foto da peça impressa* para a IA analisar o visual e gerar a proposta completa!"
+                )
         return {"ok": True}
 
     # Se recebeu algum texto solto e o modelo já está com a proposta montada

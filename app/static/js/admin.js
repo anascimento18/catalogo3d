@@ -121,6 +121,20 @@ function renderModelsTable() {
       ? `<span class="meta-badge parts">📦 ${m.parts_count} peças</span>` 
       : '';
 
+    // Detecção de Manual em PDF anexado
+    let hasPdf = false;
+    if (m.file_3d_filename && m.file_3d_filename.toLowerCase().endsWith('.pdf')) {
+      hasPdf = true;
+    } else if (m.files_3d_list) {
+      try {
+        const parsedList = typeof m.files_3d_list === 'string' ? JSON.parse(m.files_3d_list) : m.files_3d_list;
+        hasPdf = Array.isArray(parsedList) && parsedList.some(item => (item.name || '').toLowerCase().endsWith('.pdf'));
+      } catch(e) {}
+    }
+    const pdfBadge = hasPdf 
+      ? `<span class="meta-badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.3);" title="Inclui manual de montagem em PDF">📄 Manual PDF</span>` 
+      : '';
+
     const photosBadge = m.gallery_images && m.gallery_images.length > 0
       ? `<span class="meta-badge photos">📸 ${m.gallery_images.length + 1} fotos</span>`
       : '';
@@ -169,6 +183,7 @@ function renderModelsTable() {
           <div class="model-title-text" title="${escapeHtml(m.title)}">${escapeHtml(m.title)}</div>
           <div class="model-meta-badges">
             ${partsBadge}
+            ${pdfBadge}
             ${photosBadge}
             ${linkBadge}
             ${fileBadge}
@@ -679,11 +694,13 @@ function handle3DFiles(files) {
   selectedFiles3D = Array.from(files);
   const label3D = document.getElementById('label3D');
   if (!label3D) return;
+  const hasPdf = selectedFiles3D.some(f => f.name.toLowerCase().endsWith('.pdf'));
+  const pdfExtra = hasPdf ? ' <span style="color:#f87171;font-weight:600;">(com Manual PDF)</span>' : '';
   if (selectedFiles3D.length === 1) {
-    label3D.innerHTML = `<span style="color:#22c55e;font-weight:700;">✓ ${selectedFiles3D[0].name}</span> (${(selectedFiles3D[0].size/1024/1024).toFixed(2)} MB)`;
+    label3D.innerHTML = `<span style="color:#22c55e;font-weight:700;">✓ ${selectedFiles3D[0].name}</span> (${(selectedFiles3D[0].size/1024/1024).toFixed(2)} MB)${pdfExtra}`;
   } else {
     const totalSize = (selectedFiles3D.reduce((acc, f) => acc + f.size, 0)/1024/1024).toFixed(2);
-    label3D.innerHTML = `<span style="color:#38bdf8;font-weight:700;">✓ ${selectedFiles3D.length} peças/arquivos selecionados</span> (Total: ${totalSize} MB)`;
+    label3D.innerHTML = `<span style="color:#38bdf8;font-weight:700;">✓ ${selectedFiles3D.length} peças/arquivos selecionados${pdfExtra}</span> (Total: ${totalSize} MB)`;
   }
 }
 
