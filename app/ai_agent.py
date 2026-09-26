@@ -193,7 +193,7 @@ Analise os dados desta peça:
 - Categorias disponíveis no catálogo: {json.dumps(cat_list, ensure_ascii=False)}
 
 Suas metas obrigatórias:
-1. Criar um título comercial MARQUETEIRO e chamativo em Português do Brasil (PT-BR). NUNCA deixe nomes crus como "Mood_Ghost.rar" ou em inglês se houver termo mais atraente em português.
+1. Criar um título comercial MARQUETEIRO, ELEGANTE e CONCISO em Português do Brasil (PT-BR), com no máximo 40 a 50 caracteres (ex: "Diorama Spawn vs Homem-Aranha", "Presépio Completo de Natal", "Miniatura Gata Negra"). NUNCA use títulos gigantescos ou listas intermináveis de palavras-chave.
 2. Selecionar a melhor categoria existente na lista acima.
 3. Redigir uma descrição persuasiva de venda com 2 a 3 frases, destacando charme visual, exclusividade e acabamento premium.
 4. Definir "max_market_price" (valor teto de mercado no Brasil) e calcular "suggested_price" (número decimal com 10% a 15% de desconto sobre o teto).
@@ -249,6 +249,11 @@ Retorne EXCLUSIVAMENTE um JSON válido com esta estrutura exata:
                 title = str(parsed.get("title") or "").strip()
                 if not title:
                     title = _generate_fallback(filename, cat_list)["title"]
+                elif len(title) > 60:
+                    shortened = title[:58]
+                    if " " in shortened:
+                        shortened = shortened.rsplit(" ", 1)[0]
+                    title = shortened.strip()
                     
                 cat = str(parsed.get("category") or "").strip()
                 matched_cat = cat_list[0]

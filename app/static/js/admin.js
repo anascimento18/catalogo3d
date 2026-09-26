@@ -4,6 +4,9 @@ let allAdminModels = [];
 let selectedFiles3D = [];
 let selectedFileImg = null;
 let selectedGalleryImgs = [];
+let selectedModelIds = new Set();
+let currentModelsPage = 1;
+const modelsPageSize = 20;
 
 document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
@@ -56,12 +59,15 @@ async function loadAdminCategories() {
   }
 }
 
-// 3. Carrega Lista de Modelos Cadastrados
+// 3. Carrega Lista de Modelos Cadastrados com Paginação (20 por página) e Seleção Múltipla
 async function loadAdminModels() {
   const tbody = document.getElementById('modelsTableBody');
+  const countBadge = document.getElementById('modelsTotalCountBadge');
+  const paginationBar = document.getElementById('modelsPagination');
+  const bulkBar = document.getElementById('bulkActionBar');
   if (!tbody) return;
 
-  tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 24px; color: #a1a1aa;">Carregando modelos...</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding: 28px; color: #a1a1aa;">Carregando modelos...</td></tr>`;
 
   try {
     const res = await fetch('/api/admin/models');
@@ -72,85 +78,286 @@ async function loadAdminModels() {
     const models = await res.json();
     allAdminModels = models;
 
+    if (countBadge) {
+      countBadge.textContent = `${models.length} modelos cadastrados`;
+    }
+
     if (models.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 32px; color: #71717a;">Nenhum modelo cadastrado ainda. Use a aba "Novo Upload" para adicionar seu primeiro arquivo.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding: 36px; color: #71717a;">Nenhum modelo cadastrado ainda. Use a aba "Novo Upload" para adicionar seu primeiro arquivo.</td></tr>`;
+      if (paginationBar) paginationBar.style.display = 'none';
+      if (bulkBar) bulkBar.style.display = 'none';
       return;
     }
 
-    tbody.innerHTML = models.map(m => {
-      const priceText = m.price ? `R$ ${m.price.toFixed(2).replace('.', ',')}` : '0,00';
-      const showPriceBadge = m.show_price 
-        ? `<span style="color:#22c55e;font-weight:600;">Sim</span>` 
-        : `<span style="color:#eab308;font-weight:600;">Sob Consulta</span>`;
-
-      const partsInfo = m.parts_count && m.parts_count > 1 
-        ? `<span style="color:#38bdf8;font-weight:600;">📦 ${m.parts_count} peças</span> • ` 
-        : '';
-
-      const photosInfo = m.gallery_images && m.gallery_images.length > 0
-        ? `<span style="color:#a1a1aa;">📸 ${m.gallery_images.length + 1} fotos</span> • `
-        : '';
-
-      const linkInfo = m.external_url 
-        ? `<span style="color:#c084fc;font-weight:600;">🔗 Link do Site</span> • ` 
-        : '';
-
-      const fileOrUrlText = m.file_3d_filename 
-        ? escapeHtml(m.file_3d_filename) 
-        : (m.external_url ? `<a href="${escapeHtml(m.external_url)}" target="_blank" style="color:#c084fc;text-decoration:underline;">${escapeHtml(m.external_url.substring(0, 45))}...</a>` : 'Sem arquivo');
-
-      const externalBtn = m.external_url ? `
-        <a href="${escapeHtml(m.external_url)}" target="_blank" rel="noopener noreferrer" class="btn-action" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border-color: rgba(168, 85, 247, 0.35);" title="Abrir site/personalizador original em nova aba">
-          <i data-lucide="external-link" style="width:14px;height:14px;"></i>
-          <span>Abrir Site</span>
-        </a>
-      ` : '';
-
-      const downloadBtn = m.file_3d_filename ? `
-        <a href="/api/admin/models/${m.id}/download" class="btn-action download" title="Baixar arquivo 3D original">
-          <i data-lucide="download" style="width:14px;height:14px;"></i>
-          <span>Download 3D</span>
-        </a>
-      ` : '';
-
-      return `
-        <tr>
-          <td style="width: 60px;">
-            <img src="/api/public/images/${m.image_filename}" style="width: 48px; height: 48px; object-fit: cover; border-radius: 6px;" alt="Foto">
-          </td>
-          <td>
-            <strong>${escapeHtml(m.title)}</strong><br>
-            <small style="color: #71717a;">${partsInfo}${photosInfo}${linkInfo}${fileOrUrlText}</small>
-          </td>
-          <td>${escapeHtml(m.category_name)}</td>
-          <td><span class="badge-tag">${m.file_format}</span></td>
-          <td>${priceText}</td>
-          <td>${showPriceBadge}</td>
-          <td>🔥 ${m.order_count || 0}</td>
-          <td style="text-align: right; white-space: nowrap;">
-            <button class="btn-action edit" onclick="openEditModal(${m.id})" title="Editar dados e link" style="border-color: rgba(56, 189, 248, 0.4); color: #38bdf8;">
-              <i data-lucide="edit-3" style="width:14px;height:14px;"></i>
-              <span>Editar</span>
-            </button>
-            ${externalBtn}
-            ${downloadBtn}
-            <button class="btn-action delete" onclick="deleteModel(${m.id}, '${escapeHtml(m.title)}')" title="Excluir modelo">
-              <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
-              <span>Excluir</span>
-            </button>
-          </td>
-        </tr>
-      `;
-    }).join('');
-
-    if (window.lucide) lucide.createIcons();
+    renderModelsTable();
   } catch (err) {
     console.error('Erro ao listar modelos:', err);
-    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 24px; color: #ef233c;">Erro ao carregar dados do servidor.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding: 24px; color: #ef233c;">Erro ao carregar dados do servidor.</td></tr>`;
   }
 }
 
-// 4. Download, Edição e Exclusão de Modelos
+function renderModelsTable() {
+  const tbody = document.getElementById('modelsTableBody');
+  if (!tbody) return;
+
+  const totalItems = allAdminModels.length;
+  const totalPages = Math.ceil(totalItems / modelsPageSize) || 1;
+
+  if (currentModelsPage > totalPages) currentModelsPage = totalPages;
+  if (currentModelsPage < 1) currentModelsPage = 1;
+
+  const startIdx = (currentModelsPage - 1) * modelsPageSize;
+  const endIdx = Math.min(startIdx + modelsPageSize, totalItems);
+  const pageModels = allAdminModels.slice(startIdx, endIdx);
+
+  tbody.innerHTML = pageModels.map(m => {
+    const isSelected = selectedModelIds.has(m.id);
+    const priceText = m.price ? `R$ ${m.price.toFixed(2).replace('.', ',')}` : '0,00';
+    const showPriceBadge = m.show_price 
+      ? `<span style="color:#22c55e;font-weight:600;">Sim</span>` 
+      : `<span style="color:#eab308;font-weight:600;">Sob Consulta</span>`;
+
+    const partsBadge = m.parts_count && m.parts_count > 1 
+      ? `<span class="meta-badge parts">📦 ${m.parts_count} peças</span>` 
+      : '';
+
+    const photosBadge = m.gallery_images && m.gallery_images.length > 0
+      ? `<span class="meta-badge photos">📸 ${m.gallery_images.length + 1} fotos</span>`
+      : '';
+
+    const linkBadge = m.external_url 
+      ? `<span class="meta-badge link">🔗 Link</span>` 
+      : '';
+
+    let fileBadge = '';
+    if (m.file_3d_filename) {
+      let displayName = m.file_3d_filename;
+      if (displayName.length > 22) {
+        const ext = displayName.split('.').pop();
+        displayName = displayName.substring(0, 16) + '...' + (ext ? '.' + ext : '');
+      }
+      fileBadge = `<span class="meta-badge file" title="${escapeHtml(m.file_3d_filename)}">📁 ${escapeHtml(displayName)}</span>`;
+    } else if (m.external_url) {
+      fileBadge = `<span class="meta-badge file" title="${escapeHtml(m.external_url)}">🌐 Personalizador</span>`;
+    } else {
+      fileBadge = `<span class="meta-badge file">Sem arquivo</span>`;
+    }
+
+    const externalBtn = m.external_url ? `
+      <a href="${escapeHtml(m.external_url)}" target="_blank" rel="noopener noreferrer" class="btn-action" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border-color: rgba(168, 85, 247, 0.35);" title="Abrir site/personalizador original em nova aba">
+        <i data-lucide="external-link" style="width:14px;height:14px;"></i>
+        <span>Abrir Site</span>
+      </a>
+    ` : '';
+
+    const downloadBtn = m.file_3d_filename ? `
+      <a href="/api/admin/models/${m.id}/download" class="btn-action download" title="Baixar arquivo 3D original">
+        <i data-lucide="download" style="width:14px;height:14px;"></i>
+        <span>Download 3D</span>
+      </a>
+    ` : '';
+
+    return `
+      <tr class="${isSelected ? 'selected' : ''}">
+        <td style="text-align: center;">
+          <input type="checkbox" class="table-checkbox model-row-cb" data-id="${m.id}" onchange="toggleModelSelect(${m.id}, this.checked)" ${isSelected ? 'checked' : ''}>
+        </td>
+        <td style="width: 56px;">
+          <img src="/api/public/images/${m.image_filename}" style="width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border-subtle);" alt="Foto">
+        </td>
+        <td>
+          <div class="model-title-text" title="${escapeHtml(m.title)}">${escapeHtml(m.title)}</div>
+          <div class="model-meta-badges">
+            ${partsBadge}
+            ${photosBadge}
+            ${linkBadge}
+            ${fileBadge}
+          </div>
+        </td>
+        <td>${escapeHtml(m.category_name)}</td>
+        <td><span class="badge-tag">${m.file_format || '3D'}</span></td>
+        <td style="font-weight: 600;">${priceText}</td>
+        <td>${showPriceBadge}</td>
+        <td>🔥 ${m.order_count || 0}</td>
+        <td style="text-align: right; white-space: nowrap;">
+          <button class="btn-action edit" onclick="openEditModal(${m.id})" title="Editar dados" style="border-color: rgba(56, 189, 248, 0.4); color: #38bdf8;">
+            <i data-lucide="edit-3" style="width:14px;height:14px;"></i>
+            <span>Editar</span>
+          </button>
+          ${externalBtn}
+          ${downloadBtn}
+          <button class="btn-action delete" onclick="deleteModel(${m.id}, '${escapeHtml(m.title)}')" title="Excluir modelo">
+            <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
+            <span>Excluir</span>
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  // Atualiza estado do checkbox mestre (Selecionar Todos desta página)
+  const masterCb = document.getElementById('selectAllCheckbox');
+  if (masterCb) {
+    const allPageSelected = pageModels.length > 0 && pageModels.every(m => selectedModelIds.has(m.id));
+    masterCb.checked = allPageSelected;
+  }
+
+  // Atualiza barra de ações em massa
+  updateBulkActionBar();
+
+  // Atualiza paginação
+  renderPagination(totalPages, totalItems, startIdx, endIdx);
+
+  if (window.lucide) lucide.createIcons();
+}
+
+function updateBulkActionBar() {
+  const bulkBar = document.getElementById('bulkActionBar');
+  const countEl = document.getElementById('bulkSelectedCount');
+  if (!bulkBar) return;
+
+  if (selectedModelIds.size > 0) {
+    bulkBar.style.display = 'flex';
+    if (countEl) countEl.textContent = selectedModelIds.size;
+  } else {
+    bulkBar.style.display = 'none';
+  }
+}
+
+function toggleSelectAll(checked) {
+  const totalItems = allAdminModels.length;
+  const startIdx = (currentModelsPage - 1) * modelsPageSize;
+  const endIdx = Math.min(startIdx + modelsPageSize, totalItems);
+  const pageModels = allAdminModels.slice(startIdx, endIdx);
+
+  pageModels.forEach(m => {
+    if (checked) {
+      selectedModelIds.add(m.id);
+    } else {
+      selectedModelIds.delete(m.id);
+    }
+  });
+
+  renderModelsTable();
+}
+
+function toggleModelSelect(id, checked) {
+  if (checked) {
+    selectedModelIds.add(id);
+  } else {
+    selectedModelIds.delete(id);
+  }
+  renderModelsTable();
+}
+
+function clearModelSelection() {
+  selectedModelIds.clear();
+  renderModelsTable();
+}
+
+function renderPagination(totalPages, totalItems, startIdx, endIdx) {
+  const container = document.getElementById('modelsPagination');
+  const infoEl = document.getElementById('paginationInfo');
+  const controlsEl = document.getElementById('paginationControls');
+  if (!container || !infoEl || !controlsEl) return;
+
+  if (totalItems <= modelsPageSize) {
+    container.style.display = 'none';
+    return;
+  }
+
+  container.style.display = 'flex';
+  infoEl.innerHTML = `Mostrando <strong>${startIdx + 1}</strong>–<strong>${endIdx}</strong> de <strong>${totalItems}</strong> modelos`;
+
+  let html = '';
+
+  // Botão Anterior
+  html += `
+    <button class="page-btn" ${currentModelsPage <= 1 ? 'disabled' : ''} onclick="goToModelsPage(${currentModelsPage - 1})" title="Página anterior">
+      <i data-lucide="chevron-left" style="width:14px;height:14px;"></i>
+      <span>Anterior</span>
+    </button>
+  `;
+
+  // Botões de Páginas Numéricas
+  for (let p = 1; p <= totalPages; p++) {
+    if (totalPages > 7) {
+      // Regra de páginas com reticências
+      if (p !== 1 && p !== totalPages && Math.abs(p - currentModelsPage) > 1) {
+        if (p === 2 || p === totalPages - 1) {
+          html += `<span class="page-ellipsis">...</span>`;
+        }
+        continue;
+      }
+    }
+    const isActive = p === currentModelsPage;
+    html += `
+      <button class="page-btn ${isActive ? 'active' : ''}" onclick="goToModelsPage(${p})">
+        ${p}
+      </button>
+    `;
+  }
+
+  // Botão Próxima
+  html += `
+    <button class="page-btn" ${currentModelsPage >= totalPages ? 'disabled' : ''} onclick="goToModelsPage(${currentModelsPage + 1})" title="Próxima página">
+      <span>Próxima</span>
+      <i data-lucide="chevron-right" style="width:14px;height:14px;"></i>
+    </button>
+  `;
+
+  controlsEl.innerHTML = html;
+}
+
+function goToModelsPage(page) {
+  currentModelsPage = page;
+  renderModelsTable();
+  const tableContainer = document.getElementById('tabModels');
+  if (tableContainer) {
+    tableContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+async function bulkDeleteSelected() {
+  if (selectedModelIds.size === 0) return;
+
+  const count = selectedModelIds.size;
+  if (!confirm(`Tem certeza que deseja excluir os ${count} modelos selecionados e todos os seus arquivos físicos? Esta ação não pode ser desfeita.`)) {
+    return;
+  }
+
+  const btn = document.getElementById('btnBulkDelete');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<i data-lucide="loader-2" class="spin" style="width:14px;height:14px;"></i><span>Excluindo ${count}...</span>`;
+    if (window.lucide) lucide.createIcons();
+  }
+
+  try {
+    const res = await fetch('/api/admin/models/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_ids: Array.from(selectedModelIds) })
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao excluir modelos');
+
+    alert(`${data.deleted_count || count} modelos excluídos com sucesso!`);
+    selectedModelIds.clear();
+    await loadAdminModels();
+  } catch (err) {
+    alert(err.message || 'Erro ao executar exclusão em massa');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<i data-lucide="trash-2" style="width:14px;height:14px;"></i><span>Excluir Selecionados</span>`;
+      if (window.lucide) lucide.createIcons();
+    }
+  }
+}
+
+// 4. Download, Edição e Exclusão de Modelos Individuais
 async function deleteModel(id, title) {
   if (!confirm(`Tem certeza que deseja excluir o modelo "${title}" e seus arquivos do servidor?`)) {
     return;
@@ -161,6 +368,7 @@ async function deleteModel(id, title) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Erro ao excluir');
 
+    selectedModelIds.delete(id);
     loadAdminModels();
   } catch (err) {
     alert(err.message || 'Erro ao excluir');

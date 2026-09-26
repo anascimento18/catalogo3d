@@ -539,6 +539,50 @@ def delete_model(
     db.commit()
     return {"ok": True}
 
+@app.post("/api/admin/models/bulk-delete")
+async def bulk_delete_models(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: str = Depends(get_current_admin)
+):
+    """Exclui múltiplos modelos e remove seus arquivos físicos em lote."""
+    data = await request.json()
+    model_ids = data.get("model_ids") or []
+    if not model_ids:
+        raise HTTPException(status_code=400, detail="Nenhum modelo selecionado.")
+
+    deleted_count = 0
+    for mid in model_ids:
+        model = db.query(Model3D).filter(Model3D.id == int(mid)).first()
+        if model:
+            # Remove capa física
+            if model.image_filename and model.image_filename != "default_3d_cover.png":
+                p = IMAGE_DIR / model.image_filename
+                if p.exists():
+                    try: p.unlink(missing_ok=True)
+                    except: pass
+            # Remove galeria física
+            try:
+                gal = json.loads(model.gallery_images or "[]")
+                for g in gal:
+                    gp = IMAGE_DIR / g
+                    if gp.exists():
+                        try: gp.unlink(missing_ok=True)
+                        except: pass
+            except: pass
+            # Remove arquivo 3D
+            if model.file_3d_filename:
+                p3d = MODEL_DIR / model.file_3d_filename
+                if p3d.exists():
+                    try: p3d.unlink(missing_ok=True)
+                    except: pass
+
+            db.delete(model)
+            deleted_count += 1
+
+    db.commit()
+    return {"ok": True, "deleted_count": deleted_count, "message": f"{deleted_count} modelos excluídos com sucesso."}
+
 @app.patch("/api/admin/models/{model_id}")
 async def update_model(
     model_id: int,
