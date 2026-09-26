@@ -135,8 +135,16 @@ function renderModelsTable() {
       ? `<span class="meta-badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.3);" title="Inclui manual de montagem em PDF">📄 Manual PDF</span>` 
       : '';
 
-    const photosBadge = m.gallery_images && m.gallery_images.length > 0
-      ? `<span class="meta-badge photos">📸 ${m.gallery_images.length + 1} fotos</span>`
+    let galCount = 0;
+    if (m.gallery_images) {
+      if (Array.isArray(m.gallery_images)) {
+        galCount = m.gallery_images.length;
+      } else {
+        try { galCount = JSON.parse(m.gallery_images).length; } catch(e) {}
+      }
+    }
+    const photosBadge = galCount > 0
+      ? `<span class="meta-badge photos">📸 ${galCount + 1} fotos</span>`
       : '';
 
     const linkBadge = m.external_url 
@@ -390,6 +398,289 @@ async function deleteModel(id, title) {
   }
 }
 
+// Renderiza e atualiza o bloco de Mídias (Capa, Galeria e PDF) dentro do Modal de Edição
+function renderEditMediaSection(model) {
+  if (!model) return;
+
+  // 1. Capa Principal
+  const coverImg = document.getElementById('editCoverPreview');
+  const btnReset = document.getElementById('btnResetCover');
+  const coverSrc = model.image_filename 
+    ? `/static/uploads/images/${model.image_filename}` 
+    : '/static/img/default_3d_cover.png';
+  if (coverImg) {
+    coverImg.src = coverSrc;
+  }
+  if (btnReset) {
+    btnReset.style.display = (model.image_filename && model.image_filename !== 'default_3d_cover.png') ? 'inline-block' : 'none';
+  }
+
+  // 2. Galeria de Fotos Secundárias
+  const galleryListEl = document.getElementById('editGalleryList');
+  const galleryCountEl = document.getElementById('editGalleryCount');
+  let gallery = [];
+  try {
+    gallery = Array.isArray(model.gallery_images) ? model.gallery_images : JSON.parse(model.gallery_images || '[]');
+  } catch(e) {
+    gallery = [];
+  }
+
+  if (galleryCountEl) galleryCountEl.textContent = gallery.length;
+
+  if (galleryListEl) {
+    if (gallery.length === 0) {
+      galleryListEl.innerHTML = `<span style="font-size: 12px; color: #71717a;">Nenhuma foto adicional na galeria deste modelo.</span>`;
+    } else {
+      galleryListEl.innerHTML = gallery.map(imgName => `
+        <div style="position: relative; width: 60px; height: 60px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); background: #000;">
+          <img src="/static/uploads/images/${imgName}" style="width: 100%; height: 100%; object-fit: cover;" alt="Foto">
+          <button type="button" onclick="deleteGalleryPhoto(${model.id}, '${imgName}')" title="Excluir esta foto" style="position: absolute; top: 2px; right: 2px; background: rgba(239, 35, 60, 0.9); color: #fff; border: none; border-radius: 50%; width: 18px; height: 18px; font-size: 11px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; padding: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.5);">
+            ×
+          </button>
+        </div>
+      `).join('');
+    }
+  }
+
+  // 3. Manual de Montagem em PDF
+  const pdfContainer = document.getElementById('editPdfStatusContainer');
+  const pdfUploadLabel = document.getElementById('editPdfUploadLabel');
+
+  let pdfName = null;
+  if (model.file_3d_filename && model.file_3d_filename.toLowerCase().endsWith('.pdf')) {
+    pdfName = model.file_3d_filename;
+  } else if (model.files_3d_list) {
+    try {
+      const parsedList = typeof model.files_3d_list === 'string' ? JSON.parse(model.files_3d_list) : model.files_3d_list;
+      if (Array.isArray(parsedList)) {
+        const pdfItem = parsedList.find(item => (item.name || '').toLowerCase().endsWith('.pdf'));
+        if (pdfItem) pdfName = pdfItem.name;
+      }
+    } catch(e) {}
+  }
+
+  if (pdfContainer) {
+    if (pdfName) {
+      pdfContainer.innerHTML = `
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+          <div style="display: flex; align-items: center; gap: 8px; color: #f87171; font-weight: 600; font-size: 13px;">
+            <i data-lucide="file-text" style="width: 16px; height: 16px; flex-shrink: 0;"></i>
+            <span style="word-break: break-all;">${pdfName}</span>
+          </div>
+          <button type="button" class="btn-action delete" onclick="deleteModelPdf(${model.id})" style="padding: 4px 8px; font-size: 12px;">
+            <i data-lucide="trash-2" style="width: 13px; height: 13px;"></i>
+            <span>Excluir PDF</span>
+          </button>
+        </div>
+      `;
+      if (pdfUploadLabel) pdfUploadLabel.textContent = 'Substituir PDF';
+    } else {
+      pdfContainer.innerHTML = `
+        <div style="color: #71717a; font-size: 12.5px; display: flex; align-items: center; gap: 6px;">
+          <i data-lucide="info" style="width: 14px; height: 14px; flex-shrink: 0;"></i>
+          <span>Nenhum manual de montagem em PDF anexado.</span>
+        </div>
+      `;
+      if (pdfUploadLabel) pdfUploadLabel.textContent = '+ Anexar PDF';
+    }
+  }
+
+  if (window.lucide) lucide.createIcons();
+}
+
+function showMediaStatus(msg, isSuccess = true) {
+  const el = document.getElementById('mediaActionStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = isSuccess ? '#22c55e' : '#ef233c';
+  el.style.display = 'inline-block';
+  setTimeout(() => {
+    el.style.display = 'none';
+  }, 4000);
+}
+
+// Manipulador de Troca de Imagem de Capa
+window.handleCoverChange = async function(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+
+  const id = parseInt(document.getElementById('editModelId').value);
+  const formData = new FormData();
+  formData.append('image', file);
+
+  try {
+    showMediaStatus('Enviando nova foto de capa...');
+    const res = await fetch(`/api/admin/models/${id}/cover`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao trocar imagem de capa');
+
+    const model = allAdminModels.find(m => m.id === id);
+    if (model) {
+      model.image_filename = data.image_filename;
+      renderEditMediaSection(model);
+      renderModelsTable();
+    }
+    showMediaStatus('Foto de capa atualizada!');
+  } catch(err) {
+    showMediaStatus(`Erro: ${err.message}`, false);
+    alert(err.message || 'Erro ao trocar imagem de capa');
+  } finally {
+    input.value = '';
+  }
+};
+
+// Restaura Capa Padrão
+window.resetCoverToDefault = async function() {
+  const id = parseInt(document.getElementById('editModelId').value);
+  if (!confirm('Deseja restaurar a imagem de capa padrão para este modelo?')) return;
+
+  try {
+    showMediaStatus('Restaurando capa padrão...');
+    const res = await fetch(`/api/admin/models/${id}/cover/reset`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao restaurar capa');
+
+    const model = allAdminModels.find(m => m.id === id);
+    if (model) {
+      model.image_filename = data.image_filename;
+      renderEditMediaSection(model);
+      renderModelsTable();
+    }
+    showMediaStatus('Capa restaurada!');
+  } catch(err) {
+    showMediaStatus(`Erro: ${err.message}`, false);
+  }
+};
+
+// Manipulador de Upload de Fotos Adicionais da Galeria
+window.handleGalleryUpload = async function(input) {
+  const files = input.files;
+  if (!files || files.length === 0) return;
+
+  const id = parseInt(document.getElementById('editModelId').value);
+  const formData = new FormData();
+  for (let i = 0; i < files.length; i++) {
+    formData.append('images', files[i]);
+  }
+
+  try {
+    showMediaStatus(`Enviando ${files.length} foto(s)...`);
+    const res = await fetch(`/api/admin/models/${id}/gallery`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao adicionar fotos');
+
+    const model = allAdminModels.find(m => m.id === id);
+    if (model) {
+      model.gallery_images = data.gallery_images;
+      renderEditMediaSection(model);
+      renderModelsTable();
+    }
+    showMediaStatus(data.message || 'Fotos adicionadas!');
+  } catch(err) {
+    showMediaStatus(`Erro: ${err.message}`, false);
+    alert(err.message || 'Erro ao adicionar fotos à galeria');
+  } finally {
+    input.value = '';
+  }
+};
+
+// Manipulador de Exclusão de Foto da Galeria
+window.deleteGalleryPhoto = async function(id, filename) {
+  if (!confirm('Deseja realmente apagar esta foto da galeria?')) return;
+
+  try {
+    showMediaStatus('Excluindo foto...');
+    const res = await fetch(`/api/admin/models/${id}/gallery/${encodeURIComponent(filename)}`, {
+      method: 'DELETE'
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao excluir foto');
+
+    const model = allAdminModels.find(m => m.id === id);
+    if (model) {
+      model.gallery_images = data.gallery_images;
+      renderEditMediaSection(model);
+      renderModelsTable();
+    }
+    showMediaStatus('Foto apagada da galeria!');
+  } catch(err) {
+    showMediaStatus(`Erro: ${err.message}`, false);
+    alert(err.message || 'Erro ao apagar foto');
+  }
+};
+
+// Manipulador de Upload/Substituição de PDF
+window.handlePdfUpload = async function(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+
+  const id = parseInt(document.getElementById('editModelId').value);
+  const formData = new FormData();
+  formData.append('pdf_file', file);
+
+  try {
+    showMediaStatus('Anexando manual PDF...');
+    const res = await fetch(`/api/admin/models/${id}/pdf`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao anexar manual PDF');
+
+    const model = allAdminModels.find(m => m.id === id);
+    if (model) {
+      model.files_3d_list = data.files_3d_list;
+      model.parts_count = data.parts_count;
+      if (!model.file_3d_filename) {
+        model.file_3d_filename = data.pdf_name;
+      }
+      renderEditMediaSection(model);
+      renderModelsTable();
+    }
+    showMediaStatus('Manual PDF anexado com sucesso!');
+  } catch(err) {
+    showMediaStatus(`Erro: ${err.message}`, false);
+    alert(err.message || 'Erro ao enviar manual PDF');
+  } finally {
+    input.value = '';
+  }
+};
+
+// Manipulador de Exclusão de PDF
+window.deleteModelPdf = async function(id) {
+  if (!confirm('Deseja remover o manual em PDF deste modelo?')) return;
+
+  try {
+    showMediaStatus('Removendo manual PDF...');
+    const res = await fetch(`/api/admin/models/${id}/pdf`, {
+      method: 'DELETE'
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Erro ao remover PDF');
+
+    const model = allAdminModels.find(m => m.id === id);
+    if (model) {
+      model.files_3d_list = data.files_3d_list;
+      model.parts_count = data.parts_count;
+      if (model.file_3d_filename && model.file_3d_filename.toLowerCase().endsWith('.pdf')) {
+        model.file_3d_filename = '';
+      }
+      renderEditMediaSection(model);
+      renderModelsTable();
+    }
+    showMediaStatus('Manual PDF removido com sucesso!');
+  } catch(err) {
+    showMediaStatus(`Erro: ${err.message}`, false);
+    alert(err.message || 'Erro ao remover manual PDF');
+  }
+};
+
 // Abre Modal de Edição com dados preenchidos
 window.openEditModal = function(id) {
   const model = allAdminModels.find(m => m.id === id);
@@ -412,6 +703,9 @@ window.openEditModal = function(id) {
       <option value="${c.id}" ${c.id === model.category_id ? 'selected' : ''}>${c.name}</option>
     `).join('');
   }
+
+  // Renderiza Fotos e PDF Anexo
+  renderEditMediaSection(model);
 
   const alertBox = document.getElementById('editAlert');
   if (alertBox) alertBox.style.display = 'none';

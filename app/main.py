@@ -646,6 +646,353 @@ async def update_model(
         "message": "Modelo atualizado com sucesso."
     }
 
+# ==========================================
+# ROTAS DE GESTÃO DE MÍDIAS E ARQUIVOS (CAPA, GALERIA, PDF)
+# ==========================================
+
+@app.post("/api/admin/models/{model_id}/cover")
+async def update_model_cover(
+    model_id: int,
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    admin: str = Depends(get_current_admin)
+):
+    """Substitui a imagem de capa principal do modelo."""
+    model = db.query(Model3D).filter(Model3D.id == model_id).first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Modelo não encontrado.")
+
+    if not image or not image.filename:
+        raise HTTPException(status_code=400, detail="Nenhuma imagem enviada.")
+
+    ext = Path(image.filename).suffix.lower()
+    if ext not in ALLOWED_IMG_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Formato de imagem não suportado ({ext}).")
+
+    clean_title = "".join(c for c in model.title if c.isalnum() or c in ("-", "_", " ")).strip().replace(" ", "_")
+    unique_id = uuid.uuid4().hex[:8]
+    new_cover_name = f"{clean_title}_{unique_id}_cover{ext}"
+    target = IMAGE_DIR / new_cover_name
+
+    with open(target, "wb") as f:
+        shutil.copyfileobj(image.file, f)
+
+    # Exclui a capa anterior se não for a default
+    old_cover = model.image_filename
+    if old_cover and old_cover != "default_3d_cover.png" and old_cover != new_cover_name:
+        old_path = IMAGE_DIR / old_cover
+        if old_path.exists():
+            try:
+                old_path.unlink()
+            except Exception:
+                pass
+
+    model.image_filename = new_cover_name
+    db.commit()
+    db.refresh(model)
+    return {
+        "ok": True,
+        "image_filename": new_cover_name,
+        "message": "Foto de capa atualizada com sucesso!"
+    }
+
+@app.post("/api/admin/models/{model_id}/cover/reset")
+def reset_model_cover(
+    model_id: int,
+    db: Session = Depends(get_db),
+    admin: str = Depends(get_current_admin)
+):
+    """Restaura a imagem de capa padrão para o modelo."""
+    model = db.query(Model3D).filter(Model3D.id == model_id).first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Modelo não encontrado.")
+
+    old_cover = model.image_filename
+    if old_cover and old_cover != "default_3d_cover.png":
+        old_path = IMAGE_DIR / old_cover
+        if old_path.exists():
+            try:
+                old_path.unlink()
+            except Exception:
+                pass
+
+    model.image_filename = "default_3d_cover.png"
+    db.commit()
+    db.refresh(model)
+    return {
+        "ok": True,
+        "image_filename": "default_3d_cover.png",
+        "message": "Capa restaurada para a imagem padrão."
+    }
+
+@app.post("/api/admin/models/{model_id}/gallery")
+async def add_gallery_images(
+    model_id: int,
+    images: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    admin: str = Depends(get_current_admin)
+):
+    """Adiciona novas fotos adicionais à galeria do modelo."""
+    model = db.query(Model3D).filter(Model3D.id == model_id).first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Modelo não encontrado.")
+
+    clean_title = "".join(c for c in model.title if c.isalnum() or c in ("-", "_", " ")).strip().replace(" ", "_")
+    unique_id = uuid.uuid4().hex[:8]
+
+    current_gallery = []
+    try:
+        current_gallery = json.loads(model.gallery_images or "[]")
+    except Exception:
+        current_gallery = []
+
+    added = []
+    for idx, f in enumerate(images):
+        if not f or not f.filename:
+            continue
+        ext = Path(f.filename).suffix.lower()
+        if ext not in ALLOWED_IMG_EXTENSIONS:
+            continue
+        g_name = f"{clean_title}_{unique_id}_gal_{len(current_gallery)+idx+1}{ext}"
+        g_target = IMAGE_DIR / g_name
+        with open(g_target, "wb") as out_f:
+            shutil.copyfileobj(f.file, out_f)
+        current_gallery.append(g_name)
+        added.append(g_name)
+
+    model.gallery_images = json.dumps(current_gallery)
+    db.commit()
+    db.refresh(model)
+    return {
+        "ok": True,
+        "gallery_images": current_gallery,
+        "added_count": len(added),
+        "message": f"{len(added)} nova(s) foto(s) adicionada(s) à galeria!"
+    }
+
+@app.delete("/api/admin/models/{model_id}/gallery/{filename:path}")
+def delete_gallery_image(
+    model_id: int,
+    filename: str,
+    db: Session = Depends(get_db),
+    admin: str = Depends(get_current_admin)
+):
+    """Remove uma foto específica da galeria do modelo e do disco."""
+    model = db.query(Model3D).filter(Model3D.id == model_id).first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Modelo não encontrado.")
+
+    safe_name = Path(filename).name
+    current_gallery = []
+    try:
+        current_gallery = json.loads(model.gallery_images or "[]")
+    except Exception:
+        current_gallery = []
+
+    if safe_name in current_gallery:
+        current_gallery.remove(safe_name)
+        img_path = IMAGE_DIR / safe_name
+        if img_path.exists():
+            try:
+                img_path.unlink()
+            except Exception:
+                pass
+
+    model.gallery_images = json.dumps(current_gallery)
+    db.commit()
+    db.refresh(model)
+    return {
+        "ok": True,
+        "gallery_images": current_gallery,
+        "message": "Foto removida da galeria com sucesso."
+    }
+
+@app.post("/api/admin/models/{model_id}/pdf")
+async def attach_or_replace_pdf(
+    model_id: int,
+    pdf_file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    admin: str = Depends(get_current_admin)
+):
+    """Anexa ou substitui o manual de montagem/instruções em .PDF de um modelo existente."""
+    model = db.query(Model3D).filter(Model3D.id == model_id).first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Modelo não encontrado.")
+
+    if not pdf_file or not pdf_file.filename:
+        raise HTTPException(status_code=400, detail="Nenhum arquivo enviado.")
+
+    ext = Path(pdf_file.filename).suffix.lower()
+    if ext != ".pdf":
+        raise HTTPException(status_code=400, detail="Apenas arquivos .PDF são permitidos para manual de montagem.")
+
+    pdf_bytes = await pdf_file.read()
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="Arquivo PDF vazio.")
+
+    safe_pdf_name = Path(pdf_file.filename).name
+    clean_title = "".join(c for c in model.title if c.isalnum() or c in ("-", "_", " ")).strip().replace(" ", "_")
+    unique_id = uuid.uuid4().hex[:8]
+
+    parts_meta = []
+    try:
+        parts_meta = json.loads(model.files_3d_list or "[]")
+    except Exception:
+        parts_meta = []
+
+    # Caso 1: Modelo não tem arquivo 3D em disco (ex: cadastrado apenas por link externo)
+    if not model.file_3d_filename:
+        saved_pdf_name = f"{clean_title}_{unique_id}_{safe_pdf_name}"
+        target_pdf = MODEL_DIR / saved_pdf_name
+        with open(target_pdf, "wb") as f:
+            f.write(pdf_bytes)
+
+        model.file_3d_filename = saved_pdf_name
+        model.file_format = "PDF"
+        model.file_size_bytes = len(pdf_bytes)
+        model.files_3d_list = json.dumps([{"name": safe_pdf_name, "size": len(pdf_bytes)}])
+        model.parts_count = 1
+
+    # Caso 2: Modelo possui arquivo .ZIP existente
+    elif model.file_3d_filename.lower().endswith(".zip"):
+        target_zip = MODEL_DIR / model.file_3d_filename
+        temp_zip = target_zip.with_suffix(".tmp.zip")
+
+        if target_zip.exists():
+            with zipfile.ZipFile(target_zip, "r") as zin, zipfile.ZipFile(temp_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
+                for item in zin.infolist():
+                    # Exclui qualquer PDF anterior para substituir pelo novo
+                    if not item.filename.lower().endswith(".pdf"):
+                        zout.writestr(item, zin.read(item.filename))
+                # Adiciona o novo PDF
+                zout.writestr(safe_pdf_name, pdf_bytes)
+
+            shutil.move(str(temp_zip), str(target_zip))
+        else:
+            with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
+                zout.writestr(safe_pdf_name, pdf_bytes)
+
+        new_meta = [p for p in parts_meta if not p.get("name", "").lower().endswith(".pdf")]
+        new_meta.append({"name": safe_pdf_name, "size": len(pdf_bytes)})
+        model.files_3d_list = json.dumps(new_meta)
+        model.file_size_bytes = target_zip.stat().st_size
+        real_parts = [p for p in new_meta if not p.get("name", "").lower().endswith(".pdf")]
+        model.parts_count = len(real_parts) if real_parts else 1
+
+    # Caso 3: Modelo possui arquivo único que não é .ZIP (ex: .stl, .3mf, .obj)
+    else:
+        old_file_path = MODEL_DIR / model.file_3d_filename
+        bundle_name = f"{clean_title}_{unique_id}_bundle.zip"
+        target_zip = MODEL_DIR / bundle_name
+
+        existing_part_name = parts_meta[0].get("name") if parts_meta else model.file_3d_filename
+        existing_part_size = old_file_path.stat().st_size if old_file_path.exists() else 0
+
+        with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
+            if old_file_path.exists():
+                zout.write(old_file_path, arcname=existing_part_name)
+            zout.writestr(safe_pdf_name, pdf_bytes)
+
+        if old_file_path.exists():
+            try:
+                old_file_path.unlink()
+            except Exception:
+                pass
+
+        new_meta = [
+            {"name": existing_part_name, "size": existing_part_size},
+            {"name": safe_pdf_name, "size": len(pdf_bytes)}
+        ]
+        model.file_3d_filename = bundle_name
+        model.file_format = "BUNDLE ZIP"
+        model.file_size_bytes = target_zip.stat().st_size
+        model.files_3d_list = json.dumps(new_meta)
+        model.parts_count = 1
+
+    db.commit()
+    db.refresh(model)
+    return {
+        "ok": True,
+        "message": "Manual PDF anexado com sucesso!",
+        "pdf_name": safe_pdf_name,
+        "files_3d_list": json.loads(model.files_3d_list or "[]"),
+        "parts_count": model.parts_count
+    }
+
+@app.delete("/api/admin/models/{model_id}/pdf")
+def delete_model_pdf(
+    model_id: int,
+    db: Session = Depends(get_db),
+    admin: str = Depends(get_current_admin)
+):
+    """Remove o manual de montagem .PDF do modelo e do pacote de impressão."""
+    model = db.query(Model3D).filter(Model3D.id == model_id).first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Modelo não encontrado.")
+
+    parts_meta = []
+    try:
+        parts_meta = json.loads(model.files_3d_list or "[]")
+    except Exception:
+        parts_meta = []
+
+    # Caso 1: O arquivo principal era o próprio PDF
+    if model.file_3d_filename and model.file_3d_filename.lower().endswith(".pdf"):
+        pdf_path = MODEL_DIR / model.file_3d_filename
+        if pdf_path.exists():
+            try:
+                pdf_path.unlink()
+            except Exception:
+                pass
+        model.file_3d_filename = ""
+        model.files_3d_list = "[]"
+        model.file_format = "LINK" if model.external_url else ""
+        model.file_size_bytes = 0
+        model.parts_count = 1
+
+    # Caso 2: O arquivo principal é um .ZIP contendo o PDF
+    elif model.file_3d_filename and model.file_3d_filename.lower().endswith(".zip"):
+        target_zip = MODEL_DIR / model.file_3d_filename
+        if target_zip.exists():
+            temp_zip = target_zip.with_suffix(".tmp.zip")
+            remaining_entries = []
+            with zipfile.ZipFile(target_zip, "r") as zin:
+                entries = [item for item in zin.infolist() if not item.filename.lower().endswith(".pdf")]
+                if entries:
+                    with zipfile.ZipFile(temp_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
+                        for item in entries:
+                            zout.writestr(item, zin.read(item.filename))
+                    remaining_entries = entries
+
+            if remaining_entries:
+                shutil.move(str(temp_zip), str(target_zip))
+                model.file_size_bytes = target_zip.stat().st_size
+                new_meta = [p for p in parts_meta if not p.get("name", "").lower().endswith(".pdf")]
+                model.files_3d_list = json.dumps(new_meta)
+                model.parts_count = len(new_meta) if new_meta else 1
+            else:
+                try:
+                    target_zip.unlink()
+                except Exception:
+                    pass
+                model.file_3d_filename = ""
+                model.files_3d_list = "[]"
+                model.file_format = "LINK" if model.external_url else ""
+                model.file_size_bytes = 0
+                model.parts_count = 1
+        else:
+            new_meta = [p for p in parts_meta if not p.get("name", "").lower().endswith(".pdf")]
+            model.files_3d_list = json.dumps(new_meta)
+
+    db.commit()
+    db.refresh(model)
+    return {
+        "ok": True,
+        "message": "Manual PDF removido com sucesso!",
+        "files_3d_list": json.loads(model.files_3d_list or "[]"),
+        "parts_count": model.parts_count
+    }
+
 @app.get("/api/admin/models/{model_id}/download")
 def download_model_3d(
     model_id: int,

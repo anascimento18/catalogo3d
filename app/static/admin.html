@@ -582,7 +582,7 @@
 
     <!-- MODAL DE EDIÇÃO DE MODELO -->
     <div class="modal-overlay" id="editModal" style="display: none;">
-      <div class="modal-box" style="max-width: 580px;">
+      <div class="modal-box" style="max-width: 650px; max-height: 90vh; overflow-y: auto;">
         <div class="modal-header">
           <h3 style="font-family: var(--font-display); font-size: 18px; font-weight: 700;">Editar Informações do Modelo</h3>
           <button class="modal-close" onclick="closeEditModal()" type="button">
@@ -594,6 +594,78 @@
 
           <form id="editForm">
             <input type="hidden" id="editModelId">
+
+            <!-- Seção de Gerenciamento de Fotos e Manual PDF -->
+            <div style="background: rgba(9, 9, 11, 0.6); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+                <h4 style="font-size: 13.5px; font-weight: 700; color: #f4f4f5; margin: 0; display: flex; align-items: center; gap: 8px;">
+                  <i data-lucide="layers" style="width: 16px; height: 16px; color: #ef233c;"></i>
+                  <span>Fotos da Vitrine & Manual (.PDF)</span>
+                </h4>
+                <span id="mediaActionStatus" style="font-size: 11.5px; color: #22c55e; font-weight: 600;"></span>
+              </div>
+
+              <!-- 1. Foto de Capa Principal -->
+              <div style="margin-bottom: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <label style="font-size: 12.5px; font-weight: 600; color: #d4d4d8; margin: 0;">
+                    Foto de Capa Principal (Vitrine)
+                  </label>
+                  <button type="button" id="btnResetCover" onclick="resetCoverToDefault()" style="display: none; background: transparent; border: none; color: #a1a1aa; font-size: 11.5px; text-decoration: underline; cursor: pointer;">
+                    Restaurar Capa Padrão
+                  </button>
+                </div>
+                <div style="display: flex; align-items: center; gap: 14px; background: rgba(24, 24, 27, 0.4); padding: 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.05);">
+                  <div style="position: relative; width: 68px; height: 68px; border-radius: 8px; overflow: hidden; border: 2px solid #ef233c; flex-shrink: 0; background: #000;">
+                    <img id="editCoverPreview" src="" alt="Capa" style="width: 100%; height: 100%; object-fit: cover;">
+                  </div>
+                  <div style="flex: 1; min-width: 0;">
+                    <label for="editInputCover" class="btn-action" style="cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12.5px;">
+                      <i data-lucide="upload" style="width: 14px; height: 14px;"></i>
+                      <span>Trocar Imagem de Capa</span>
+                    </label>
+                    <input type="file" id="editInputCover" accept="image/*" style="display: none;" onchange="handleCoverChange(this)">
+                    <p style="font-size: 11.5px; color: #71717a; margin: 4px 0 0;">Substitui a imagem que aparece no catálogo.</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 2. Fotos Adicionais da Galeria -->
+              <div style="margin-bottom: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <label style="font-size: 12.5px; font-weight: 600; color: #d4d4d8; margin: 0;">
+                    Galeria de Fotos (<span id="editGalleryCount">0</span>)
+                  </label>
+                  <label for="editInputGallery" class="btn-action" style="cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12px;">
+                    <i data-lucide="plus" style="width: 14px; height: 14px;"></i>
+                    <span>+ Inserir Fotos</span>
+                  </label>
+                  <input type="file" id="editInputGallery" accept="image/*" multiple style="display: none;" onchange="handleGalleryUpload(this)">
+                </div>
+
+                <div id="editGalleryList" style="display: flex; gap: 10px; flex-wrap: wrap; min-height: 48px; align-items: center; background: rgba(24, 24, 27, 0.4); padding: 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.05);">
+                  <!-- Miniaturas com botão de apagar injetadas via JS -->
+                </div>
+              </div>
+
+              <!-- 3. Manual de Montagem em PDF -->
+              <div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <label style="font-size: 12.5px; font-weight: 600; color: #d4d4d8; margin: 0;">
+                    Manual de Montagem / Instruções (.PDF)
+                  </label>
+                  <label for="editInputPdf" class="btn-action" style="cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12px; border-color: rgba(239, 68, 68, 0.3); color: #f87171;">
+                    <i data-lucide="file-up" style="width: 14px; height: 14px;"></i>
+                    <span id="editPdfUploadLabel">+ Inserir / Trocar PDF</span>
+                  </label>
+                  <input type="file" id="editInputPdf" accept=".pdf" style="display: none;" onchange="handlePdfUpload(this)">
+                </div>
+
+                <div id="editPdfStatusContainer" style="background: rgba(24, 24, 27, 0.4); border: 1px dashed rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 10px 14px; font-size: 13px;">
+                  <!-- Detalhes do PDF ou aviso de ausência injetados via JS -->
+                </div>
+              </div>
+            </div>
 
             <div class="form-group">
               <label for="editModelTitle">Título do Modelo *</label>
@@ -656,7 +728,7 @@
 
   </div>
 
-  <script src="/static/js/admin.js?v=5.1.0"></script>
+  <script src="/static/js/admin.js?v=5.2.0"></script>
   <script>
     lucide.createIcons();
   </script>
